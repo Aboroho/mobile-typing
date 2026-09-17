@@ -6,8 +6,11 @@
  * the (development only) fallback providers enabled while still refusing to
  * silently downgrade a production build.
  */
+import { TextDecoder, TextEncoder } from 'node:util';
+
 process.env.APP_ENV = 'test';
-process.env.NODE_ENV = 'test';
+// NODE_ENV is often typed read-only; cast through unknown for the test runner.
+(process.env as { NODE_ENV?: string }).NODE_ENV = 'test';
 process.env.DEV_SESSION_SECRET = 'test-dev-session-secret-0123456789';
 process.env.APP_SECRET = 'test-app-secret-0123456789';
 process.env.ADMIN_UID = 'admin-uid';
@@ -19,7 +22,6 @@ process.env.STORAGE_PROVIDER = 'memory';
 process.env.SEED_SECRET_CODE = 'opensesame';
 
 if (typeof globalThis.TextEncoder === 'undefined') {
-  const { TextEncoder, TextDecoder } = await import('node:util');
   globalThis.TextEncoder = TextEncoder as unknown as typeof globalThis.TextEncoder;
   globalThis.TextDecoder = TextDecoder as unknown as typeof globalThis.TextDecoder;
 }

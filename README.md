@@ -5,8 +5,9 @@ visitor as a typing-practice game. The chat is reachable only by typing a
 secret code into the game and then authenticating; it locks itself the moment
 the tab is hidden or the user triple-taps.
 
-Built with Next.js (App Router), TypeScript, Tailwind, Zustand, Zod and Firebase
-(Auth, Firestore, Storage, Admin SDK), with WebRTC audio calls.
+Built as a **single Next.js app** (App Router) with TypeScript, Tailwind,
+Zustand, Zod and Firebase (Auth, Firestore, Storage, Admin SDK), plus WebRTC
+audio calls. The same UI works on phones and desktops.
 
 ```
 npm install && cp .env.example .env.local && npm run dev
@@ -14,6 +15,9 @@ npm install && cp .env.example .env.local && npm run dev
 
 Then open http://localhost:3000. Type the bootstrap secret code (`opensesame` by
 default) into the typing test to reveal sign-in.
+
+> New here? Read **[howto.md](./howto.md)** for `.env` setup, what happens when
+> data is missing, and troubleshooting the Start test button.
 
 ---
 
@@ -33,7 +37,7 @@ default) into the typing test to reveal sign-in.
 
 ```bash
 node --version          # >= 20.11
-npm install             # installs all workspaces
+npm install
 cp .env.example .env.local
 npm run dev             # http://localhost:3000
 ```
@@ -55,7 +59,7 @@ npm run seed
 | `npm run dev` | Start the Next.js dev server (port 3000) |
 | `npm run build` | Production build |
 | `npm run start` | Serve the production build |
-| `npm run typecheck` | `tsc --noEmit` across every workspace |
+| `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint with `--max-warnings=0` |
 | `npm run lint:fix` | ESLint with autofix |
 | `npm run format` / `npm run format:check` | Prettier |
@@ -87,9 +91,10 @@ data access: every API route independently verifies the access session and the
 user, and the access session is bound to the user it was issued for.
 
 **Typing game** — English and Bengali word lists (static assets under
-`apps/web/public/typing-words/`), 30/60/120 s tests, live WPM/accuracy/remaining
+`public/typing-words/`), 30/60/120 s tests, live WPM/accuracy/remaining
 time, per-character highlighting, a result screen with a grade and replay, and a
-layout that works with a virtual keyboard.
+layout that works on mobile and desktop (including virtual keyboards). If the
+word list fails to load, a built-in fallback keeps **Start test** working.
 
 **Locking** — triple tap (touch + pointer, with time and distance thresholds) and
 tab hide/minimise both return to the game and clear unlock state; an active call
@@ -134,27 +139,38 @@ logs.
 ## Repository layout
 
 ```
-apps/web                Next.js application: UI, 51 API routes, services
-apps/mobile/README.md   Notes for a future React Native client
-packages/types          Domain types, enums and product limits
-packages/validation     Zod schemas for every request
-packages/domain         Pure business rules (keystroke buffer, scoring, policies)
-packages/api-client     Typed browser API client
-packages/config         Environment parsing (public + server)
-packages/utils          Hashing, ids, time, base64, text helpers
-firebase/               Firestore/Storage rules, indexes, provisioning notes
-scripts/                Dev seeding, admin custom-claim helper
-docs/                   Architecture, API, schema, security, deployment, decisions
-e2e/                    Playwright specifications
+app/                 Next.js App Router: UI pages + /api/v1/* route handlers
+components/          React UI (typing game, chat, admin, shared primitives)
+hooks/ stores/       Client hooks and Zustand stores
+lib/
+  types/             Domain types, enums and product limits
+  validation/        Zod schemas for every request
+  domain/            Pure business rules (keystroke buffer, scoring, policies)
+  api-client/        Typed browser API client
+  config/            Environment parsing (public + server)
+  utils/             Hashing, ids, time, base64, text helpers
+  access/ auth/ …    Server services, data providers, realtime, WebRTC
+public/typing-words/ English + Bengali word lists
+firebase/            Firestore/Storage rules, indexes, provisioning notes
+scripts/             Dev seeding, admin custom-claim helper
+docs/                Architecture, API, schema, security, deployment, decisions
+tests/               Vitest unit + API integration tests
+e2e/                 Playwright specifications
+howto.md             Setup, .env, and missing-data troubleshooting
 ```
+
+This is a **single package** — no npm workspaces, no Turborepo, no separate
+mobile app. Shared modules live under `lib/` and are imported via `@/` and
+`@mt/*` path aliases.
 
 ## Environment variables
 
-See [`.env.example`](./.env.example) for the annotated list. The essentials:
+See [`.env.example`](./.env.example) and **[howto.md](./howto.md)** for the
+annotated list and what happens when values are missing. The essentials:
 
 | Variable | Purpose |
 | --- | --- |
-| `DATA_PROVIDER` / `AUTH_PROVIDER` / `STORAGE_PROVIDER` | `memory`/`dev` for local work, `firebase` in production |
+| `DATA_PROVIDER` / `AUTH_PROVIDER` / `STORAGE_PROVIDER` | `memory`/`dev` for local work, `firebase`/`firestore` in production |
 | `APP_SECRET` | Signs access challenges and sessions (≥ 16 characters) |
 | `ADMIN_UID` / `ADMIN_EMAIL` | Administrator identity; never sent to a client |
 | `SEED_SECRET_CODE` | Bootstrap code until an administrator changes it |
@@ -191,12 +207,13 @@ TURN_SERVER_CREDENTIAL=<secret>
 
 | Document | Contents |
 | --- | --- |
-| [`docs/architecture.md`](./docs/architecture.md) | Setup, local development, workspace layout, request lifecycle, the access gate and secret-code behaviour, locking, session invalidation |
-| [`docs/api.md`](./docs/api.md) | Every route, its auth requirement, payloads, error codes, rate limits and SSE events |
-| [`docs/database-schema.md`](./docs/database-schema.md) | Collections, fields, indexes, cursors and known Firestore limitations |
-| [`docs/security.md`](./docs/security.md) | Threat model, defence in depth, credentials, cookies, headers, privacy limitations, screenshot limitations, production checklist |
-| [`docs/deployment.md`](./docs/deployment.md) | Environment variables, Firebase provisioning, TURN, Vercel, troubleshooting |
-| [`docs/decisions.md`](./docs/decisions.md) | Architectural decisions with the rejected alternatives |
+| [`howto.md`](./howto.md) | **Start here** — install, `.env`, missing data, Start button |
+| [`docs/architecture.md`](./docs/architecture.md) | Setup, local development, layout, request lifecycle, access gate |
+| [`docs/api.md`](./docs/api.md) | Every route, auth requirement, payloads, error codes, SSE events |
+| [`docs/database-schema.md`](./docs/database-schema.md) | Collections, fields, indexes, cursors |
+| [`docs/security.md`](./docs/security.md) | Threat model, defence in depth, credentials, cookies, headers |
+| [`docs/deployment.md`](./docs/deployment.md) | Environment variables, Firebase, TURN, Vercel, troubleshooting |
+| [`docs/decisions.md`](./docs/decisions.md) | Architectural decisions with rejected alternatives |
 
 ## Limitations
 

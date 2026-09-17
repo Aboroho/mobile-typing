@@ -4,7 +4,7 @@ Each entry records the decision, the alternative that was rejected, and why.
 
 ## 1. A repository layer instead of calling Firestore directly
 
-`apps/web/lib/data/types.ts` defines nine repository interfaces; `memory` and
+`lib/data/types.ts` defines nine repository interfaces; `memory` and
 `firestore` implement them. Services never import `firebase-admin`.
 
 - *Alternative rejected*: calling Firestore from services. It would make the app
@@ -58,7 +58,7 @@ the bytes is possible. `viewing` also acts as a crash guard: a client that opene
 the image and never confirmed leaves it unrecoverable rather than re-openable.
 
 - *Tested*: two simultaneous `POST /media/{id}/view` calls produce exactly one
-  200 (`apps/web/tests/api/media.test.ts`).
+  200 (`tests/api/media.test.ts`).
 
 ## 7. Deletion is soft, and the original text is preserved
 
