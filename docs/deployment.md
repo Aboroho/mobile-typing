@@ -190,6 +190,8 @@ Vercel-specific constraints:
 
 | Symptom | Cause / fix |
 | --- | --- |
+| `config.issue` lines on boot | The environment review (`lib/config/diagnostics.ts`) predicted a failure: a Firebase provider without credentials, placeholder secrets, or a fallback provider in a production build. The `detail` field names the variables to set |
+| Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | `AUTH_PROVIDER=firebase` but the browser could not produce an ID token: `NEXT_PUBLIC_FIREBASE_*` is unset (logged as `firebase_auth_without_client_config`), or the domain is not in Firebase Authorised domains. Locally, `AUTH_PROVIDER=dev` needs no Firebase project |
 | `Refusing to use the memory fallback in production` | `DATA_PROVIDER`/`AUTH_PROVIDER`/`STORAGE_PROVIDER` are not set to their Firebase values |
 | `Invalid environment: APP_SECRET: Too small` | `APP_SECRET` must be at least 16 characters |
 | Typing the code does nothing | The buffer is at most 15 characters and the match is case sensitive and consecutive. Check `/api/v1/access/status` for the current `maxLength` and `epoch` |
