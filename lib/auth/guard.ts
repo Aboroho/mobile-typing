@@ -1,6 +1,7 @@
 import { AppError } from '@mt/domain';
 import { verifyAccessSession } from '../access/access-service';
 import { getData } from '../data';
+import { env } from '../env';
 import { logger } from '../logger';
 import { readCookie } from './cookies';
 import { isAdminUser, resolveAuth } from './session';
@@ -31,8 +32,14 @@ export async function requireAdmin(request: Request): Promise<ResolvedAuth> {
  * matches the currently configured secret code. Rotating the code invalidates
  * every previously issued session, which is the documented strategy for
  * invalidating old access challenges.
+ *
+ * When `NEXT_PUBLIC_ENABLE_TYPING_GAME=false` the typing-game disguise and its
+ * secret-code gate are not shown on the client, so there is no way for a
+ * browser to ever obtain an access-session cookie — this check is skipped
+ * entirely to match.
  */
 export async function requireAccess(request: Request): Promise<{ epoch: number; userId: string | null }> {
+  if (!env().NEXT_PUBLIC_ENABLE_TYPING_GAME) return { epoch: 0, userId: null };
   const cookie = readCookie(request, ACCESS_COOKIE);
   const session = await verifyAccessSession(cookie);
   if (!session) throw AppError.accessRequired();

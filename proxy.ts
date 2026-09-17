@@ -11,32 +11,66 @@ import { NextResponse, type NextRequest } from 'next/server';
  *
  * Authorisation is *not* done here: it happens in the API routes, where the
  * Firebase ID token and the access session are verified against the database.
+ *
+ * The CSP is nonce-based rather than relying on `'unsafe-inline'`: the App
+ * Router hydrates the page with inline `<script>` tags (`self.__next_f.push`,
+ * the RSC flight data, etc.), so a `script-src 'self'` policy with no
+ * `'unsafe-inline'`/nonce blocks every one of them outright — the app never
+ * hydrates and appears to hang (e.g. "Loading words…" forever). Next.js reads
+ * the nonce back out of this header and stamps it onto its own inline
+ * scripts automatically, so no other code has to know about it.
+ * See: https://nextjs.org/docs/app/guides/content-security-policy
  */
-const CSP = [
-  "default-src 'self'",
-  // Inline styles are emitted by Tailwind/React; scripts stay external.
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "media-src 'self' blob: mediastream:",
-  "font-src 'self' data:",
-  "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com wss://*.googleapis.com",
-  "frame-ancestors 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "object-src 'none'",
-].join('; ');
+function buildCsp(nonce: string): string {
+  const isDev = process.env.NODE_ENV === 'development';
+  return [
+    "default-src 'self'",
+    // 'strict-dynamic' lets the nonce-bearing framework scripts load whatever
+    // scripts they themselves inject, without falling back to 'unsafe-inline'.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob: mediastream:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com wss://*.googleapis.com",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join('; ');
+}
 
 export function proxy(request: NextRequest) {
-  const response = NextResponse.next();
   const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+
+  // The nonce must reach Next's own renderer via the *request* headers (so it
+  // can stamp framework scripts with it), not just the response.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-request-id', requestId);
+  requestHeaders.set('x-nonce', nonce);
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+
   response.headers.set('x-request-id', requestId);
+
+  // ENABLE_SECURITY_HEADERS=false is an escape hatch for local debugging only.
+  const securityHeadersEnabled = process.env.ENABLE_SECURITY_HEADERS !== 'false';
+  if (!securityHeadersEnabled) return response;
+
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('Referrer-Policy', 'no-referrer');
   response.headers.set('Permissions-Policy', 'camera=(), geolocation=(), interest-cohort=(), microphone=(self)');
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-  response.headers.set('Content-Security-Policy', CSP);
+
+  const cspMode = process.env.CSP_MODE ?? 'enforce';
+  if (cspMode === 'off') return response;
+
+  const csp = buildCsp(nonce);
+  const headerName = cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
+  response.headers.set(headerName, csp);
+
   return response;
 }
 

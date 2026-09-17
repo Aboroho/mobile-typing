@@ -53,6 +53,15 @@ export const serverEnvSchema = z.object({
   CSP_MODE: z.enum(['enforce', 'report', 'off']).default('enforce'),
   ENABLE_SECURITY_HEADERS: booleanish.default(true),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).default('info'),
+
+  /**
+   * Whether the game is disguise is shown at all is not sensitive, so a
+   * single `NEXT_PUBLIC_*` flag drives both the client UI and the server-side
+   * access-session requirement (see `requireAccess` in `lib/auth/guard.ts`).
+   * Keeping one flag avoids the client and API ever disagreeing about whether
+   * a secret-code unlock is required.
+   */
+  NEXT_PUBLIC_ENABLE_TYPING_GAME: booleanish.default(true),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
