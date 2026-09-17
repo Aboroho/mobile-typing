@@ -1,4 +1,4 @@
-import { parsePublicEnv, hasFirebaseClientConfig } from '@mt/config';
+import { parsePublicEnv, hasFirebaseClientConfig, hasPartialFirebaseClientConfig } from '@mt/config';
 
 export interface AuthClient {
   readonly kind: 'firebase' | 'dev';
@@ -19,6 +19,14 @@ export interface AuthClient {
  */
 async function createAuthClient(): Promise<AuthClient> {
   const publicEnv = parsePublicEnv();
+
+  if (hasPartialFirebaseClientConfig(publicEnv)) {
+    throw new Error(
+      'Firebase web authentication is incompletely configured. Set NEXT_PUBLIC_FIREBASE_API_KEY, ' +
+        'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
+        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID, and NEXT_PUBLIC_FIREBASE_APP_ID.',
+    );
+  }
 
   if (hasFirebaseClientConfig(publicEnv)) {
     const [{ initializeApp, getApps }, { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updateProfile: fbUpdateProfile, signOut: fbSignOut }] =
@@ -45,8 +53,20 @@ async function createAuthClient(): Promise<AuthClient> {
         return onAuthStateChanged(auth, (user) => callback(user?.uid ?? null));
       },
       async signUp({ email, password, name }) {
-        const credential = await createUserWithEmailAndPassword(auth, email, password);
-        await fbUpdateProfile(credential.user, { displayName: name });
+        // A profile request can fail after Firebase has created the account. Reuse
+        // that still-authenticated account on retry instead of attempting a
+        // second Firebase sign-up (which would only produce auth/email-already-in-use).
+        const normalizedEmail = email.trim().toLowerCase();
+        const current = auth.currentUser;
+        const user =
+          current && current.email?.trim().toLowerCase() === normalizedEmail
+            ? current
+            : (await createUserWithEmailAndPassword(auth, email, password)).user;
+        await fbUpdateProfile(user, { displayName: name });
+        // Force token acquisition here so registration never races Firebase's
+        // auth-state observer. The API client obtains the same current token as
+        // the Authorization: Bearer credential on the next request.
+        await user.getIdToken();
       },
       async signIn({ email, password }) {
         await signInWithEmailAndPassword(auth, email, password);

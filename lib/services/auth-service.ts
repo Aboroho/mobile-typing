@@ -58,11 +58,34 @@ export async function register(input: {
       logMissingFirebaseClientConfig('register');
       throw AppError.unauthenticated('complete the Firebase sign-up first');
     }
+    const normalizedEmail = verified.email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      logger.warn('auth.firebase_token_missing_email', { uid: verified.uid });
+      throw AppError.unauthenticated('your Firebase account does not have an email address');
+    }
+
+    // Registration is intentionally idempotent for the authenticated Firebase
+    // identity. This is what makes a retry after a transient profile-write
+    // failure safe, while the email check prevents an inconsistent identity
+    // association if a Firebase account's email was changed later.
     const existing = await data.users.getById(verified.uid);
-    if (existing) throw AppError.conflict('that account already exists');
+    if (existing) {
+      if (existing.email.trim().toLowerCase() !== normalizedEmail) {
+        logger.warn('auth.firebase_profile_email_mismatch', { uid: verified.uid });
+        throw AppError.conflict('that account cannot be linked to this profile');
+      }
+      return { user: existing, token: null, cookieSession: false };
+    }
+
+    // Do not associate a new Firebase UID with an application profile that
+    // belongs to another UID, even when the Firebase email is duplicated or
+    // stale in the request.
+    const emailOwner = await data.users.getByEmail(normalizedEmail);
+    if (emailOwner) throw AppError.conflict('that account already exists');
+
     const record = await createProfile({
       id: verified.uid,
-      email: verified.email,
+      email: normalizedEmail,
       name,
     });
     return { user: record, token: null, cookieSession: false };

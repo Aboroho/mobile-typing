@@ -79,7 +79,26 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     });
   }
 
-  // 2. Any Firebase-backed provider needs Admin credentials; without them the
+  // 2. A client and Admin SDK pointed at different projects can create a valid
+  // Firebase account whose token the backend can never verify. Catch that
+  // deployment error before it presents as a generic registration 401.
+  if (
+    server.AUTH_PROVIDER === 'firebase' &&
+    hasFirebaseClientConfig(publicEnv) &&
+    server.FIREBASE_PROJECT_ID &&
+    publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
+    server.FIREBASE_PROJECT_ID !== publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID
+  ) {
+    issues.push({
+      level: 'error',
+      reason: 'firebase_project_mismatch',
+      message:
+        'The Firebase web config and Admin SDK use different projects: NEXT_PUBLIC_FIREBASE_PROJECT_ID must match ' +
+        'FIREBASE_PROJECT_ID, otherwise the backend rejects every browser ID token.',
+    });
+  }
+
+  // 3. Any Firebase-backed provider needs Admin credentials; without them the
   //    first request that touches data/auth/storage throws a 500.
   const needsAdmin =
     server.DATA_PROVIDER === 'firestore' ||
