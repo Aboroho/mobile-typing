@@ -35,16 +35,12 @@ export function toUserRecord(docId: string, data: Record<string, unknown>): User
     isAdmin: Boolean(data['isAdmin']),
     createdAt: String(data['createdAt']),
     updatedAt: String(data['updatedAt']),
-    passwordHash: (data['passwordHash'] as string | null) ?? null,
-    passwordSalt: (data['passwordSalt'] as string | null) ?? null,
     disabledReason: (data['disabledReason'] as string | null) ?? null,
   };
 }
 
 export function toUserProfile(record: UserRecord): UserProfile {
-  const { passwordHash: _hash, passwordSalt: _salt, disabledReason: _reason, ...profile } = record;
-  void _hash;
-  void _salt;
+  const { disabledReason: _reason, ...profile } = record;
   void _reason;
   return profile;
 }

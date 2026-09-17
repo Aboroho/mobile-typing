@@ -3,9 +3,9 @@ import { createApiClient, type ApiClient } from '@mt/api-client';
 /**
  * Single API client for the browser.
  *
- * Credentials are supplied by the auth client (a Firebase ID token when
- * configured, otherwise the httpOnly dev session cookie), so no call site ever
- * handles a token directly.
+ * Credentials are supplied by the auth client (the Firebase ID token) and by the
+ * httpOnly session cookie the API sets, so no call site ever handles a token
+ * directly.
  */
 let cached: ApiClient | null = null;
 let tokenProvider: (() => Promise<string | null>) | null = null;
@@ -23,6 +23,12 @@ function client(): ApiClient {
         if (code === 'ACCESS_REQUIRED') {
           // The access session expired or was revoked: fall back to the game.
           globalThis.dispatchEvent(new CustomEvent('mt:access-required'));
+        }
+        if (code === 'UNAUTHENTICATED' || code === 'ACCOUNT_DISABLED') {
+          // The session expired, was revoked by a logout or an administrator, or
+          // the credential could not be refreshed: drop the user so the sign-in
+          // panel returns instead of every later request failing quietly.
+          globalThis.dispatchEvent(new CustomEvent('mt:auth-required'));
         }
       },
     });

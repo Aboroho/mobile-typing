@@ -8,9 +8,11 @@ import { GET as auditRoute } from '@/app/api/v1/admin/audit-logs/route';
 import { POST as createConversationRoute } from '@/app/api/v1/conversations/route';
 import { POST as sendMessageRoute } from '@/app/api/v1/messages/route';
 import { GET as statusRoute } from '@/app/api/v1/access/status/route';
+import { GET as conversationsRoute } from '@/app/api/v1/conversations/route';
 import { POST as updateStatusRoute } from '@/app/api/v1/admin/users/[userId]/status/route';
 import { POST as loginRoute } from '@/app/api/v1/auth/login/route';
 import { call, jar, jsonRequest, queryRequest, registerUser, unlockJar, type TestUser } from '../helpers/api';
+import { fakeAdminAuth } from '../helpers/firebase-auth';
 
 let admin: TestUser;
 let alice: TestUser;
@@ -124,7 +126,13 @@ describe('secret code management', () => {
 });
 
 describe('user management', () => {
-  it('disables an account so it can no longer sign in', async () => {
+  it('disables an account so its session dies and it cannot sign in again', async () => {
+    const conversationsBefore = await call(
+      conversationsRoute,
+      queryRequest('GET', '/api/v1/conversations', undefined, bob.jar),
+    );
+    expect(conversationsBefore.status).toBe(200);
+
     const disabled = await call(
       updateStatusRoute,
       jsonRequest('POST', `/api/v1/admin/users/${bob.id}/status`, { status: 'disabled', reason: 'abuse' }, admin.jar),
@@ -132,13 +140,26 @@ describe('user management', () => {
     );
     expect(disabled.status).toBe(200);
 
+    // The Firebase account is disabled and its credentials revoked, so the
+    // session Bob was holding stops working immediately.
+    const after = await call(
+      conversationsRoute,
+      queryRequest('GET', '/api/v1/conversations', undefined, bob.jar),
+    );
+    expect(after.status).toBe(401);
+
+    // Firebase refuses the sign-in itself, and the API's answer to an
+    // unverifiable credential is the same opaque 401 a wrong password gets.
+    expect(() => fakeAdminAuth.signInWithPassword('bob@example.com', 'CorrectHorse1!')).toThrowError(
+      expect.objectContaining({ errorInfo: { code: 'auth/user-disabled' } }),
+    );
     const fresh = await unlockJar();
-    const login = await call(loginRoute, jsonRequest('POST', '/api/v1/auth/login', { email: 'bob@example.com', password: 'CorrectHorse1!' }, fresh));
+    fresh.token = fakeAdminAuth.issueFor(bob.uid);
+    const login = await call(loginRoute, jsonRequest('POST', '/api/v1/auth/login', { email: 'bob@example.com' }, fresh));
     expect(login.status).toBe(401);
-    // A disabled account must look exactly like a wrong password.
     const wrongPassword = await call(
       loginRoute,
-      jsonRequest('POST', '/api/v1/auth/login', { email: 'bob@example.com', password: 'WrongPassword1!' }, fresh),
+      jsonRequest('POST', '/api/v1/auth/login', { email: 'nobody@example.com' }, fresh),
     );
     expect(wrongPassword.body.error?.message).toBe(login.body.error?.message);
   });

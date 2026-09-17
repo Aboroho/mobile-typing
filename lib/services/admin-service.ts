@@ -12,7 +12,7 @@ import type {
 import { formatDuration } from '@mt/utils';
 import type { AdminUserRow } from '@mt/types';
 import { getData, type UserRecord } from '../data';
-import { getAuthProvider } from '../auth';
+import { setFirebaseUserDisabled } from '../auth/firebase';
 import { isAdminUser } from '../auth/session';
 import { writeAuditLog } from '../security/audit';
 import { ensureAccessConfig } from '../access/access-service';
@@ -123,11 +123,14 @@ export async function getUserDetail(userId: string) {
   };
 }
 
+/**
+ * A profile as the admin panel sees it. No credential material is stored any
+ * more — Firebase Authentication owns passwords — so all that is left to do is
+ * re-derive `isAdmin` from the server environment instead of trusting a stored
+ * flag.
+ */
 function stripSecrets(record: UserRecord) {
-  const { passwordHash: _hash, passwordSalt: _salt, ...rest } = record;
-  void _hash;
-  void _salt;
-  return { ...rest, isAdmin: isAdminUser(record) };
+  return { ...record, isAdmin: isAdminUser(record) };
 }
 
 export async function updateUserStatus(input: {
@@ -142,7 +145,7 @@ export async function updateUserStatus(input: {
   if (isAdminUser(record)) {
     throw new AppError('FORBIDDEN', 'the administrator account cannot be disabled');
   }
-  await getAuthProvider().setDisabled(input.userId, input.status === 'disabled');
+  await setFirebaseUserDisabled(input.userId, input.status === 'disabled');
   const updated = await data.users.update(input.userId, {
     status: input.status,
     disabledReason: input.status === 'disabled' ? (input.reason ?? null) : null,

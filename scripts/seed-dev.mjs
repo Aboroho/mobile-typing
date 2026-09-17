@@ -4,14 +4,11 @@
  * prints the value to put in ADMIN_UID.
  *
  * It talks to the dev server (default http://localhost:3000) through the public
- * API, so it exercises exactly the same code path as the browser. Which path
- * that is depends on the server's AUTH_PROVIDER, and the script adapts to both:
- *
- *   dev       the API registers email + password itself (scrypt hashing).
- *   firebase  the API only accepts a Firebase ID token, exactly like the browser
- *             SDK does. The script therefore signs up / signs in through the
- *             Identity Toolkit REST API with NEXT_PUBLIC_FIREBASE_API_KEY and
- *             presents the resulting ID token as a bearer token.
+ * API, so it exercises exactly the same code path as the browser: accounts are
+ * created in Firebase Authentication through the Identity Toolkit REST API with
+ * NEXT_PUBLIC_FIREBASE_API_KEY (the same call the browser SDK makes), and the
+ * resulting ID token is presented as a bearer token. A password is never sent to
+ * the Keypad API, exactly as in the browser.
  *
  * Configuration comes from the environment — the same keys the application
  * itself uses — never from hard-coded defaults in this file:
@@ -21,7 +18,7 @@
  *   SEED_PEER_EMAIL    peer account email                 (default peer@example.com)
  *   SEED_PEER_PASSWORD peer account password              (default ADMIN_PASSWORD)
  *   SEED_SECRET_CODE   access code used to unlock the gate (falls back to the
- *                      code the dev challenge hands out)
+ *                      code the challenge hands out)
  *   BASE_URL           server to talk to                  (default http://localhost:3000)
  *   FIREBASE_IDENTITY_BASE_URL  Identity Toolkit endpoint (default Google's; point
  *                      it at the Auth emulator, e.g. http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1)
@@ -246,56 +243,29 @@ function wasAutoNamed(user, email) {
 }
 
 /**
- * Registers one account. Registration is not idempotent by design, and
- * `/api/v1/auth/register` is rate limited to five calls per ten minutes per IP,
- * so an account that already exists is detected (or fetched) rather than
- * re-registered on every run:
+ * Registers one account.
  *
- *   firebase  the Identity Toolkit call above already says whether the Firebase
- *             account is new, so only a brand new account is registered.
- *   dev       an existing account is cheaper to detect with /login first.
+ * The Identity Toolkit call says whether the Firebase account is new, which
+ * matters because `/api/v1/auth/register` is rate limited to five calls per ten
+ * minutes per IP: an account that already exists is signed in instead of being
+ * registered again on every run.
  */
-async function seedAccount(account, accessCookie, authProvider) {
-  const body = {
-    name: account.name,
-    email: account.email,
-    password: account.password,
-    confirmPassword: account.password,
-  };
+async function seedAccount(account, accessCookie) {
   const options = { cookie: accessCookie };
-  const credentials = { email: account.email, password: account.password };
+  const session = await firebaseSession(account.email, account.password);
+  options.token = session.idToken;
 
-  if (authProvider === 'firebase') {
-    const session = await firebaseSession(account.email, account.password);
-    options.token = session.idToken;
-    if (session.existed) {
-      const { payload } = await post('/api/v1/auth/login', credentials, options);
-      const repaired = await repairName(payload.user, account, accessCookie, options.token);
-      return { status: 'exists', user: repaired };
-    }
-    const { payload } = await post('/api/v1/auth/register', body, options);
-    return { status: 'created', user: payload.user };
+  if (session.existed) {
+    const { payload } = await post('/api/v1/auth/login', { email: account.email }, options);
+    const repaired = await repairName(payload.user, account, accessCookie, options.token);
+    return { status: 'exists', user: repaired };
   }
-
-  try {
-    const { payload } = await post('/api/v1/auth/login', credentials, options);
-    return { status: 'exists', user: payload.user };
-  } catch (error) {
-    if (error.status !== 401) throw error;
-  }
-  try {
-    const { payload } = await post('/api/v1/auth/register', body, options);
-    return { status: 'created', user: payload.user };
-  } catch (error) {
-    if (error.status === 409) {
-      throw new Error(
-        `${account.email} already exists but the configured password does not match it ` +
-          '(or the account is disabled). Restart the dev server to reset the in-memory store, ' +
-          'or delete the account, then run the seed again.',
-      );
-    }
-    throw error;
-  }
+  const { payload } = await post(
+    '/api/v1/auth/register',
+    { name: account.name, email: account.email },
+    options,
+  );
+  return { status: 'created', user: payload.user };
 }
 
 /** Gives an auto-created profile the display name the seed asked for. */
@@ -348,16 +318,14 @@ async function main() {
     );
   }
 
-  const authProvider = health.data?.authProvider ?? 'dev';
+  const authProvider = health.data?.authProvider ?? 'firebase';
   console.log(`server: ${BASE_URL} — data: ${health.data?.dataProvider}, auth: ${authProvider}`);
 
-  if (authProvider === 'firebase' && !FIREBASE_API_KEY) {
+  if (!FIREBASE_API_KEY) {
     fail(
-      'The running server uses AUTH_PROVIDER=firebase, so /api/v1/auth/register only accepts a Firebase\n' +
-        'ID token — a password alone is not enough (that is the "complete the Firebase sign-up first"\n' +
-        'error). Two ways forward:\n' +
-        '  1. Set NEXT_PUBLIC_FIREBASE_API_KEY (Web API key of the same project) in .env.local and re-run.\n' +
-        '  2. Or run the dev server with AUTH_PROVIDER=dev for local seeding, then switch back.',
+      'Registration needs a Firebase ID token, which only the Identity Toolkit can issue — a password\n' +
+        'alone is not enough (that is the "complete the Firebase sign-up first" error). Set\n' +
+        'NEXT_PUBLIC_FIREBASE_API_KEY (the Web API key of the same project) in .env.local and re-run.',
     );
   }
 
@@ -374,7 +342,7 @@ async function main() {
 
   for (const account of accounts) {
     try {
-      const { status, user } = await seedAccount(account, accessCookie, authProvider);
+      const { status, user } = await seedAccount(account, accessCookie);
       if (account.email === ADMIN_EMAIL) adminUid = user.id;
       console.log(
         `${status === 'created' ? 'created' : 'already present'} ${account.email} -> uid ${user.id}` +

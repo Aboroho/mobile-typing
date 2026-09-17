@@ -34,13 +34,18 @@ npm run dev          # in one terminal
 npm run seed         # in another
 ```
 
-With `AUTH_PROVIDER=firebase` a password alone cannot call
-`/api/v1/auth/register`: the endpoint only accepts a Firebase ID token, so the
-seed signs up / signs in through the Identity Toolkit REST API with
-`NEXT_PUBLIC_FIREBASE_API_KEY` and passes the returned ID token as a bearer
-token. Set `FIREBASE_IDENTITY_BASE_URL` to
+A password alone cannot call `/api/v1/auth/register`: the endpoint only accepts a
+Firebase ID token. So the seed signs up / signs in through the Identity Toolkit
+REST API with `NEXT_PUBLIC_FIREBASE_API_KEY` — the same call the browser SDK
+makes — and passes the returned ID token as a bearer token. The password never
+reaches this application's API. Set `FIREBASE_IDENTITY_BASE_URL` to
 `http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1` to use the Firebase
 Auth emulator instead of the real project.
+
+Re-running is safe: the Identity Toolkit reports whether an account already
+exists, so existing accounts are signed in (and their display name repaired)
+instead of being registered again — which matters because registration is rate
+limited to five calls per ten minutes per IP.
 
 There is no script that seeds conversations or messages: fabricating chat history
 would create data that never passed through the validation, authorisation and

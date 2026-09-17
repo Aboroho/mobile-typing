@@ -3,12 +3,20 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { loginSchema, registerSchema, reauthenticateSchema } from '@mt/validation';
+import {
+  loginFormSchema,
+  registerFormSchema,
+  reauthenticateFormSchema,
+  type LoginFormValues,
+  type RegisterFormValues,
+  type ReauthenticateFormValues,
+} from '@mt/validation';
 import { Lock, LogIn, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FieldError, Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { firebaseAuthMessage, getAuthClient } from '@/lib/client/auth-client';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAccessStore } from '@/stores/access-store';
 
@@ -21,6 +29,9 @@ type Mode = 'login' | 'register' | 'reauth';
  *  - already signed in → password only
  *
  * Which branch shows depends on server state, never on a client flag alone.
+ *
+ * Every credential here is checked by Firebase Authentication in the browser;
+ * the API call that follows carries the resulting ID token and never a password.
  */
 export function AuthPanel({ initialMode }: { initialMode: Mode }) {
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -28,16 +39,16 @@ export function AuthPanel({ initialMode }: { initialMode: Mode }) {
   const bind = useAccessStore((state) => state.unlockWithCode);
   void bind;
 
-  const registerForm = useForm<{ name: string; email: string; password: string; confirmPassword: string }>({
-    resolver: zodResolver(registerSchema),
+  const registerForm = useForm<RegisterFormValues>({
+    resolver: zodResolver(registerFormSchema),
     defaultValues: { name: '', email: '', password: '', confirmPassword: '' },
   });
-  const loginForm = useForm<{ email: string; password: string }>({
-    resolver: zodResolver(loginSchema),
+  const loginForm = useForm<LoginFormValues>({
+    resolver: zodResolver(loginFormSchema),
     defaultValues: { email: '', password: '' },
   });
-  const reauthForm = useForm<{ password: string }>({
-    resolver: zodResolver(reauthenticateSchema),
+  const reauthForm = useForm<ReauthenticateFormValues>({
+    resolver: zodResolver(reauthenticateFormSchema),
     defaultValues: { password: '' },
   });
 
@@ -218,26 +229,41 @@ function SwitchLink({ text, action, onClick }: { text: string; action: string; o
   );
 }
 
+/**
+ * Password reset is sent by Firebase itself, from the browser: this API has no
+ * mail transport, and a server endpoint that answered `{ sent: true }` without
+ * sending anything would be worse than none. Firebase never reveals whether the
+ * address has an account.
+ */
 function ForgotPassword({ email }: { email: string }) {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   return (
-    <button
-      type="button"
-      disabled={busy || sent || !email}
-      className="text-xs text-ink-muted underline-offset-4 hover:underline disabled:opacity-50"
-      onClick={async () => {
-        setBusy(true);
-        try {
-          const { api } = await import('@/lib/client/api');
-          await api.auth.resetPassword(email);
-          setSent(true);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      {sent ? 'Reset link sent' : 'Forgot password?'}
-    </button>
+    <span className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        disabled={busy || sent || !email}
+        className="text-xs text-ink-muted underline-offset-4 hover:underline disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true);
+          setFailure(null);
+          try {
+            const client = await getAuthClient();
+            await client.sendPasswordReset(email);
+            setSent(true);
+          } catch (error) {
+            setFailure(
+              firebaseAuthMessage(error) ?? 'that reset email could not be sent, try again later',
+            );
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {sent ? 'Reset link sent' : 'Forgot password?'}
+      </button>
+      {failure ? <span className="text-xs text-danger">{failure}</span> : null}
+    </span>
   );
 }

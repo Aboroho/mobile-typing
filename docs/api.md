@@ -39,8 +39,10 @@ Two mechanisms are supported and can be combined:
 - **Access session** — httpOnly cookie `mt_access`, issued by
   `POST /access/unlock`, signed with `APP_SECRET`, 30-minute TTL, carrying the
   configuration `epoch`.
-- **User session** — httpOnly cookie `mt_session` (HS256, `AUTH_PROVIDER=dev`)
-  or `Authorization: Bearer <Firebase ID token>` (`AUTH_PROVIDER=firebase`).
+- **User session** — a Firebase credential, either
+  `Authorization: Bearer <Firebase ID token>` (the browser SDK holds it) or the
+  httpOnly cookie `mt_session` (a Firebase session cookie this API mints from a
+  fresh ID token; `EventSource` streams can only send the cookie).
 
 In the table below:
 
@@ -59,15 +61,21 @@ In the table below:
 
 ## Authentication
 
+Every route below identifies the caller from the verified Firebase credential
+only — a user id, uid or role in a body or query string is never trusted. No
+route accepts a password: Firebase verifies it in the browser.
+
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `POST /auth/register` | public (access session required to enter the chat) | Body `{ name, email, password, confirmPassword }`. Returns `{ user, token, cookieSession, accessGranted }`. Rate limited to 5/10 min. |
-| `POST /auth/login` | public | Body `{ email, password }`. Wrong password, unknown email and disabled account all return the same 401. Rate limited to 8/10 min per email. |
-| `POST /auth/reauthenticate` | session required, access optional | Body `{ password }`. Binds the access session to the user on success. With Firebase, requires `authTime` within 5 minutes. Rate limited to 6/10 min. |
-| `POST /auth/logout` | public | Clears the session cookie. |
+| `POST /auth/register` | Firebase credential required (access session required to enter the chat) | Body `{ name, email? }`. Creates the application profile for the verified uid and sets `mt_session`. Idempotent for the same uid; 409 if the email belongs to another profile. Returns `{ user, token: null, cookieSession: true, accessGranted }`. Rate limited to 5/10 min. |
+| `POST /auth/login` | Firebase credential required | Body `{ email? }` (a cross-check and the rate-limit subject). Returns the existing profile, recreating it if it is missing. Wrong password, unknown email and disabled account all produce the same 401 — the first two in Firebase, the last here. Rate limited to 8/10 min per email. |
+| `POST /auth/reauthenticate` | Firebase credential required, access optional | No body. Requires `auth_time` within 5 minutes (412 otherwise), re-mints `mt_session` and binds the access session to the user. Rate limited to 6/10 min. |
+| `POST /auth/logout` | public | Revokes the caller's Firebase credentials (ID tokens, session cookies, refresh tokens) and clears `mt_session` and `mt_access`. |
 | `GET /auth/me` | public | `{ user }` or `{ user: null }` — 200 either way so a client can tell "signed out" from "API broken". |
 | `PATCH /auth/profile` | auth | Body `{ name?, photoUrl? }`. |
-| `POST /auth/password-reset` | public | Body `{ email }`. Always returns `{ sent: true }`. Rate limited to 3/30 min per email. |
+
+Password reset is not an API route: the browser calls Firebase's
+`sendPasswordResetEmail`, which is the only party that can mail the link.
 
 ## Users
 

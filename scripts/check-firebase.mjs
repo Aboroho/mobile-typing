@@ -55,7 +55,7 @@ const CLIENT_KEYS = [
   'NEXT_PUBLIC_FIREBASE_APP_ID',
 ];
 const ADMIN_KEYS = ['FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY'];
-const PROVIDER_KEYS = ['DATA_PROVIDER', 'AUTH_PROVIDER', 'STORAGE_PROVIDER'];
+const PROVIDER_KEYS = ['DATA_PROVIDER', 'STORAGE_PROVIDER'];
 const STORAGE_KEY = 'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET';
 const ALL_KEYS = [
   ...PROVIDER_KEYS,
@@ -71,7 +71,6 @@ const ALL_KEYS = [
 const SECRET_KEYS = new Set([
   'FIREBASE_PRIVATE_KEY',
   'APP_SECRET',
-  'DEV_SESSION_SECRET',
   'ADMIN_PASSWORD',
   'SEED_SECRET_CODE',
   'TURN_SERVER_CREDENTIAL',
@@ -222,13 +221,13 @@ if (strayQuotes.length) {
 
 // --- providers -------------------------------------------------------------
 
-const wanted = { DATA_PROVIDER: 'firestore', AUTH_PROVIDER: 'firebase', STORAGE_PROVIDER: 'firebase' };
+const wanted = { DATA_PROVIDER: 'firestore', STORAGE_PROVIDER: 'firebase' };
 for (const key of PROVIDER_KEYS) {
   const value = valueOf(key);
   if (value === wanted[key]) ok(`${key}=${value}`, `from ${sourceOf(key)}`);
   else
     fail(
-      `${key}=${value || '(unset, defaults to memory/dev)'}`,
+      `${key}=${value || '(unset, defaults to memory)'}`,
       `nothing is stored in Firebase until this is ${wanted[key]}`,
       `Set ${key}=${wanted[key]} and restart the dev server.`,
     );

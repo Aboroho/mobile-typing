@@ -35,6 +35,21 @@ export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 100;
 export const MESSAGE_PAGE_SIZE = 30;
 
+/**
+ * Lifetime of the authentication session cookie (a Firebase session cookie).
+ * Firebase accepts anything between 5 minutes and 14 days; 7 days matches the
+ * "stay signed in on this phone" expectation without being open ended.
+ */
+export const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * A Firebase ID token may only be exchanged for a session cookie while the
+ * credential is fresh, so a token leaked long after sign-in cannot be upgraded
+ * into a week-long session. This is the check Firebase's own session-cookie
+ * guide recommends.
+ */
+export const FRESH_CREDENTIAL_MAX_AGE_MS = 5 * 60 * 1000;
+
 /** Access sessions expire so a backgrounded browser cannot keep chat unlocked. */
 export const ACCESS_SESSION_TTL_MS = 30 * 60 * 1000;
 /** Signed challenge tokens are short lived by design. */

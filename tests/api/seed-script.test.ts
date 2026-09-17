@@ -5,11 +5,10 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
- * `npm run seed` must work with either auth provider. With
- * `AUTH_PROVIDER=firebase` the API only accepts a Firebase ID token, which is why
- * the seed signs up / signs in through the Identity Toolkit REST API first. The
- * failure this guards against is the bare 401 "complete the Firebase sign-up
- * first" that a password-only request receives.
+ * `npm run seed` must create its accounts the way the browser does: through
+ * Firebase Authentication, presenting the resulting ID token to an API that
+ * accepts nothing else. The failure this guards against is the bare 401
+ * "complete the Firebase sign-up first" that a password-only request receives.
  *
  * Both servers below are stand-ins: a fake Identity Toolkit, and a fake Keypad
  * API that enforces the same bearer-token rule the real one does.
@@ -188,7 +187,7 @@ afterEach(async () => {
 });
 
 describe('seed script', () => {
-  it('seeds accounts with a Firebase ID token when the server uses the firebase provider', async () => {
+  it('seeds accounts with a Firebase ID token', async () => {
     const identity = await startIdentityStub();
     const api = await startApiStub();
     cleanup.push(identity.close, api.close);
@@ -245,7 +244,7 @@ describe('seed script', () => {
     const result = await runSeed({ BASE_URL: api.url, NEXT_PUBLIC_FIREBASE_API_KEY: '' });
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('AUTH_PROVIDER=firebase');
+    expect(result.stderr).toContain('Firebase ID token');
     expect(result.stderr).toContain('NEXT_PUBLIC_FIREBASE_API_KEY');
     // Nothing was registered, so there are no misleading "skipped" lines.
     expect(api.paths).not.toContain('/api/v1/auth/register');

@@ -24,10 +24,14 @@ import type {
  * what allows a future React Native client to share this layer through the API.
  */
 
+/**
+ * A stored profile.
+ *
+ * `id` is the Firebase uid: Firebase Authentication owns the credential, so no
+ * password material is ever written here.
+ */
 export interface UserRecord extends UserProfile {
-  /** Dev auth only. Never present when AUTH_PROVIDER=firebase. */
-  passwordHash: string | null;
-  passwordSalt: string | null;
+  /** Why an administrator disabled the account, when they gave a reason. */
   disabledReason: string | null;
 }
 
@@ -43,7 +47,6 @@ export interface UserRepo {
   getById(userId: string): Promise<UserRecord | null>;
   getByEmail(email: string): Promise<UserRecord | null>;
   update(userId: string, patch: Partial<UserRecord>): Promise<UserRecord | null>;
-  updatePassword(userId: string, passwordHash: string, passwordSalt: string): Promise<void>;
   list(params: ListUsersParams): Promise<Cursor<AdminUserRow>>;
   search(q: string, limit: number): Promise<PublicUserSummary[]>;
   countByStatus(): Promise<{ total: number; active: number; disabled: number }>;

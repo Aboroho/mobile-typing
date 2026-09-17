@@ -42,9 +42,17 @@ cp .env.example .env.local
 npm run dev             # http://localhost:3000
 ```
 
-No Firebase project is required for local development: the default providers are
-in-memory (`DATA_PROVIDER=memory`, `AUTH_PROVIDER=dev`, `STORAGE_PROVIDER=memory`)
-and are refused outright in a production build. State does not survive a restart.
+Data and storage default to in-memory providers (`DATA_PROVIDER=memory`,
+`STORAGE_PROVIDER=memory`), which are refused outright in a production build and
+do not survive a restart.
+
+**Authentication always needs a Firebase project.** There is no development
+authentication provider and no offline fallback: the browser signs users up and
+in with the Firebase client SDK, and the API verifies the resulting ID tokens
+with the Admin SDK. Fill in the `NEXT_PUBLIC_FIREBASE_*` (web) and
+`FIREBASE_*` (service account) blocks of `.env.local`, and enable
+Authentication → Sign-in method → Email/Password in the console. `npm run doctor`
+checks the whole setup, including that the Email/Password provider is enabled.
 
 To create demo accounts against a running dev server:
 
@@ -52,15 +60,14 @@ To create demo accounts against a running dev server:
 npm run seed
 ```
 
-The script reads the server's `AUTH_PROVIDER` from `/api/v1/health` and adapts:
-with `dev` it registers email + password directly, with `firebase` it signs up
-through the Identity Toolkit REST API (`NEXT_PUBLIC_FIREBASE_API_KEY`) and
-registers with the resulting Firebase ID token, exactly like the browser does.
+The script signs up through the Identity Toolkit REST API
+(`NEXT_PUBLIC_FIREBASE_API_KEY`) and registers with the resulting Firebase ID
+token, exactly like the browser does.
 
 ### Keeping everything in Firebase
 
-Set `DATA_PROVIDER=firestore`, `AUTH_PROVIDER=firebase` and `STORAGE_PROVIDER=firebase`
-plus the web and Admin credentials, then verify the result before relying on it:
+Set `DATA_PROVIDER=firestore` and `STORAGE_PROVIDER=firebase` plus the web and
+Admin credentials, then verify the result before relying on it:
 
 ```bash
 npm run doctor
@@ -95,7 +102,7 @@ reports. Console steps it cannot do for you are in
 | `npm run e2e:install` | Download Chromium for Playwright (once) |
 | `npm run e2e` | Playwright end-to-end tests (starts the dev server) |
 | `npm run verify` | typecheck → lint → test → build |
-| `npm run seed` | Register demo users through the public API (works with both auth providers) |
+| `npm run seed` | Register demo users through Firebase and the public API |
 | `npm run doctor` | Check that this machine can really use the configured Firebase project (env precedence, credentials, Firestore, Auth, Storage) |
 | `npm run firebase:deploy:rules` | Deploy Firestore/Storage rules and indexes |
 
@@ -129,9 +136,13 @@ secret-code gate entirely — visitors then land straight on sign-in and chat.
 tab hide/minimise both return to the game and clear unlock state; an active call
 is ended through the API first.
 
-**Authentication** — Firebase email/password or a development provider with
-scrypt-hashed passwords; register, login, logout, reauthentication and password
-reset; opaque error messages that cannot enumerate accounts; rate limiting.
+**Authentication** — Firebase Authentication (email/password) only. The browser
+SDK verifies the password and holds the ID token; the API verifies that token
+server-side, initialises the profile and mints an httpOnly Firebase session
+cookie (which is what the SSE streams authenticate with). Register, login,
+logout (with server-side credential revocation), reauthentication and password
+reset; opaque error messages that cannot enumerate accounts; rate limiting. No
+password or password hash is ever stored in this application's database.
 
 **Conversations** — strictly 1:1 (a pair always resolves to the same
 conversation), search, unread counts, presence, typing indicators, hide from list,
@@ -199,7 +210,7 @@ annotated list and what happens when values are missing. The essentials:
 
 | Variable | Purpose |
 | --- | --- |
-| `DATA_PROVIDER` / `AUTH_PROVIDER` / `STORAGE_PROVIDER` | `memory`/`dev` for local work, `firebase`/`firestore` in production |
+| `DATA_PROVIDER` / `STORAGE_PROVIDER` | `memory` for local work, `firestore`/`firebase` in production |
 | `APP_SECRET` | Signs access challenges and sessions (≥ 16 characters) |
 | `ADMIN_UID` / `ADMIN_EMAIL` | Administrator identity; never sent to a client |
 | `SEED_SECRET_CODE` | Bootstrap code until an administrator changes it |

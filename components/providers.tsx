@@ -15,6 +15,7 @@ import { CallOverlay } from '@/components/audio-calls/call-overlay';
 export function RootProviders({ children }: { children: React.ReactNode }) {
   const initialize = useAuthStore((state) => state.initialize);
   const user = useAuthStore((state) => state.user);
+  const handleSessionRequired = useAuthStore((state) => state.handleSessionRequired);
   const lock = useAccessStore((state) => state.lock);
   const setPrivacyLocked = useUiStore((state) => state.setPrivacyLocked);
 
@@ -32,6 +33,15 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
     globalThis.addEventListener('mt:access-required', onAccessRequired);
     return () => globalThis.removeEventListener('mt:access-required', onAccessRequired);
   }, [lock, setPrivacyLocked]);
+
+  // A rejected Firebase credential (401 UNAUTHENTICATED / 403 ACCOUNT_DISABLED)
+  // drops the session, so the sign-in panel returns instead of every request
+  // failing quietly behind a UI that still looks authenticated.
+  useEffect(() => {
+    const onAuthRequired = () => handleSessionRequired();
+    globalThis.addEventListener('mt:auth-required', onAuthRequired);
+    return () => globalThis.removeEventListener('mt:auth-required', onAuthRequired);
+  }, [handleSessionRequired]);
 
   return (
     <>

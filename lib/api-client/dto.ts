@@ -36,9 +36,12 @@ export interface SessionUser {
 
 export interface AuthResult {
   user: SessionUser;
-  /** Firebase ID token, or a dev session token. The client stores/attaches it. */
+  /**
+   * Always `null`. The Firebase ID token is held by the browser SDK, which
+   * attaches it to requests itself; this API never returns a credential.
+   */
   token: string | null;
-  /** True when a session cookie was set instead of a bearer token. */
+  /** Always `true`: the session is the httpOnly `mt_session` cookie. */
   cookieSession: boolean;
   /** Access session granted as part of registration/login. */
   accessGranted: boolean;

@@ -115,13 +115,22 @@ is fixed in 16.x, which is why the project pins Next 16 rather than staying on 1
 step for the packages and one source of truth for the types shared with a future
 mobile client.
 
-## 14. Dual auth providers behind one interface
+## 14. ~~Dual auth providers behind one interface~~ — superseded by #19
 
-`AuthProvider` has `dev` (scrypt + HS256 cookie) and `firebase` (ID token)
-implementations. The same routes, services and tests work against both.
+`AuthProvider` used to have `dev` (scrypt-hashed passwords + an HS256 session
+cookie) and `firebase` (ID token) implementations behind one interface, selected
+by `AUTH_PROVIDER`.
 
-- *Alternative rejected*: Firebase-only. It would make local development and CI
-  depend on a network service and a real project.
+- *Alternative rejected at the time*: Firebase-only, because it would make local
+  development and CI depend on a network service and a real project.
+- *Why it was reversed*: the switch was the direct cause of the registration
+  failure this rewrite fixed. With `AUTH_PROVIDER=firebase` and an incomplete
+  `NEXT_PUBLIC_FIREBASE_*` config, the browser silently fell back to the dev auth
+  client, which never produces an ID token, while the server correctly required
+  one — so every sign-up came back `complete the Firebase sign-up first`. Two
+  providers also meant two password stores, two session formats and a database
+  column (`passwordHash`) that had to be defended everywhere it could leak.
+  See decision #19.
 
 ## 15. Rate limiting in the data provider
 
@@ -132,9 +141,11 @@ because these limits exist to blunt brute forcing, not to meter traffic.
 
 ## 16. Errors are opaque by design
 
-Login, register and password reset return identical responses for every failure
-mode. A disabled account is indistinguishable from a wrong password. Non-existent
-resources often return 404 rather than 403 so existence is not revealed.
+Login and register return identical responses for every failure mode this
+application controls. A disabled account is indistinguishable from a wrong
+password: both are refused by Firebase before a request reaches the API, and both
+are worded the same. Non-existent resources often return 404 rather than 403 so
+existence is not revealed.
 
 ## 17. Route handlers are plain functions
 
@@ -147,3 +158,35 @@ integration tests construct a `Request`, call the handler and assert on the
 Media is served by an authorised route with `no-store`. `images.remotePatterns`
 is empty on purpose: routing user content through the optimiser would create an
 unauthenticated fetch path.
+
+
+## 19. Firebase Authentication only
+
+Email/password authentication is Firebase's, in every environment. There is no
+provider switch, no development authentication and no offline fallback.
+
+- The browser is the only place a password exists. `createUserWithEmailAndPassword`
+  and `signInWithEmailAndPassword` verify it; the ID token is what travels.
+- The API verifies that credential server-side (`verifyIdToken` /
+  `verifySessionCookie`, always with `checkRevoked: true`) and takes the uid and
+  email **from the verified token**. An `Authorization` header, a body field or a
+  query parameter naming a user is never trusted.
+- A fresh ID token (`auth_time` within five minutes) is exchanged for a Firebase
+  session cookie in `mt_session`. That cookie is what SSE streams authenticate
+  with, because `EventSource` cannot send an `Authorization` header — which is
+  also why the API accepts either credential.
+- Logout revokes the user's Firebase credentials before the browser signs out, so
+  a copied cookie stops working. The trade-off is Firebase's: revocation is
+  account-wide, so it ends the session on every device, not just this one.
+- No password or hash is stored in this application's database; `UserRecord` has
+  no such field, and the memory provider has no password store.
+
+*Alternatives rejected*: keeping `AUTH_PROVIDER=dev` (see #14 — it was the root
+cause of the failure, and a second password store is a liability this app does not
+need); a custom JWT/password system (duplicates Firebase badly); trusting a
+client-supplied uid (an authentication bypass).
+
+*Cost*: local development and CI need a Firebase project, or the Auth emulator.
+Tests replace the Admin SDK at the `getAdminAuth()` boundary instead, so the
+route-handler tests stay honest about the credential flow without a network
+service — at the price of not covering Google's own verification code.

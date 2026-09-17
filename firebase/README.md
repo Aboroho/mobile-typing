@@ -64,17 +64,20 @@ The script sets the `role: 'admin'` custom claim, which is what
 `firestore.rules` checks. The server additionally compares the uid against
 `ADMIN_UID` on every admin request, so the claim is not the only line of defence.
 
-## 5. Switch the app to Firebase
+## 5. Switch data and storage to Firebase
 
 ```
 DATA_PROVIDER=firestore
-AUTH_PROVIDER=firebase
 STORAGE_PROVIDER=firebase
 ```
 
-Restart the dev server. All three fallback providers refuse to initialise when
+Restart the dev server. Both fallback providers refuse to initialise when
 `NODE_ENV=production` and `APP_ENV=production`, so a missing credential fails the
 deployment loudly instead of silently storing data in memory.
+
+Authentication has no such switch: it is Firebase Authentication from the first
+`npm run dev`, so steps 1–4 above (web config, Admin credentials, Email/Password
+enabled, authorised domains) are required even while data stays in memory.
 
 ## 6. Verify the result
 

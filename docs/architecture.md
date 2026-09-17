@@ -18,7 +18,7 @@ npm run dev           # http://localhost:3000
 
 `npm install` is the only setup step. There is no code generation, no database
 migration and no external service required to run locally: the default providers
-are in-memory and are selected by `DATA_PROVIDER=memory`, `AUTH_PROVIDER=dev`
+are in-memory and are selected by `DATA_PROVIDER=memory`
 and `STORAGE_PROVIDER=memory`.
 
 ## 2. Local development

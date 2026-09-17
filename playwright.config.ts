@@ -6,9 +6,13 @@ import { defineConfig, devices } from '@playwright/test';
  *   npm run e2e:install   # once: downloads Chromium
  *   npm run e2e           # starts the dev server and runs the specs
  *
- * They run against the development providers (memory data, dev auth) so no
- * Firebase project is needed. A mobile viewport is used because the product is
- * mobile-first; a desktop project is included for the responsive check.
+ * They run against the development data and storage providers, so nothing is
+ * written to a real database. Authentication is Firebase Authentication and has
+ * no offline mode: the specs that sign in need a Firebase project (set the
+ * `NEXT_PUBLIC_FIREBASE_*` values in `.env.local`) or the Firebase Auth emulator
+ * (`FIREBASE_AUTH_EMULATOR_HOST`, which the Admin SDK honours by itself).
+ * A mobile viewport is used because the product is mobile-first; a desktop
+ * project is included for the responsive check.
  */
 export default defineConfig({
   testDir: './e2e',
@@ -39,7 +43,6 @@ export default defineConfig({
     timeout: 180_000,
     env: {
       DATA_PROVIDER: 'memory',
-      AUTH_PROVIDER: 'dev',
       STORAGE_PROVIDER: 'memory',
     },
   },

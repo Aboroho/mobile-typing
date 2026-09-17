@@ -1,27 +1,15 @@
-import { assertFallbackAllowed, env } from '../env';
-import { logger } from '../logger';
-import { createDevAuthProvider } from './dev';
-import { createFirebaseAuthProvider } from './firebase';
-import type { AuthProvider } from './types';
-
+/**
+ * Authentication is Firebase Authentication — there is no second provider and no
+ * development fallback.
+ *
+ *  - `./firebase`  the trusted boundary with the Admin SDK (verify ID tokens and
+ *    session cookies, mint session cookies, revoke, disable).
+ *  - `./session`   resolves a request to an application profile.
+ *  - `./guard`     the `requireUser` / `requireAdmin` / `requireAccess` gates the
+ *    API routes call.
+ *  - `./cookies` and `./session-cookies`  cookie plumbing.
+ *
+ * The browser side lives in `lib/client/auth-client.ts` (Firebase client SDK).
+ */
 export * from './types';
-export { hashPassword, verifyPassword } from './password';
-export { issueDevSessionToken } from './dev';
-
-let cached: AuthProvider | null = null;
-let cachedName: string | null = null;
-
-export function getAuthProvider(): AuthProvider {
-  const configured = env().AUTH_PROVIDER;
-  if (cached && cachedName === configured) return cached;
-  cached = configured === 'firebase' ? createFirebaseAuthProvider() : createDevAuthProvider();
-  if (configured !== 'firebase') assertFallbackAllowed('dev authentication');
-  cachedName = configured;
-  logger.info('auth.provider.selected', { provider: cached.name });
-  return cached;
-}
-
-export function resetAuthProvider(): void {
-  cached = null;
-  cachedName = null;
-}
+export * from './firebase';

@@ -1,36 +1,34 @@
 import type { UserRecord } from '../data/types';
 
-export interface VerifiedToken {
-  uid: string;
-  email: string;
-  /** Seconds since epoch when the credential was last verified. */
-  authTime: number;
-  /** Firebase token id, used for revocation checks. */
-  tokenId: string | null;
-  isAdminClaim: boolean;
-}
-
-export interface AuthUserRecord {
-  uid: string;
-  email: string;
-  name: string;
-  disabled: boolean;
-}
-
 /**
- * Authentication boundary. `firebase` delegates to Firebase Authentication;
- * `dev` is a self-contained email/password provider used for local development
- * and tests (it hashes passwords with scrypt and issues the same style of
- * bearer token, so the rest of the stack is identical).
+ * Where a verified credential came from.
+ *
+ *  - `id-token`       `Authorization: Bearer <Firebase ID token>`, the credential
+ *                     the browser SDK holds. Short lived (1 hour, refreshed by the
+ *                     SDK) and the only credential that can be exchanged for a
+ *                     session cookie.
+ *  - `session-cookie` the httpOnly `mt_session` cookie, whose value is a Firebase
+ *                     session cookie minted by this API. Long lived, and the only
+ *                     credential a browser can present on an `EventSource`
+ *                     request (the SSE streams cannot set headers).
  */
-export interface AuthProvider {
-  readonly name: 'firebase' | 'dev';
-  verifyToken(token: string): Promise<VerifiedToken | null>;
-  createUser(input: { email: string; password: string; name: string }): Promise<AuthUserRecord>;
-  /** Dev only: Firebase verifies passwords on the client and returns an ID token. */
-  verifyPassword(email: string, password: string): Promise<AuthUserRecord | null>;
-  setDisabled(uid: string, disabled: boolean): Promise<void>;
-  sendPasswordReset(email: string): Promise<boolean>;
+export type CredentialSource = 'id-token' | 'session-cookie';
+
+export interface VerifiedToken {
+  /** Firebase uid — the canonical identity of an account in this application. */
+  uid: string;
+  email: string;
+  /** Firebase display name, when the account has one. Never trusted as an id. */
+  displayName: string | null;
+  /** Seconds since epoch when the user last authenticated (Firebase `auth_time`). */
+  authTime: number;
+  /**
+   * The `role: 'admin'` custom claim, when present. Reported for diagnostics
+   * only: API authorisation is decided by `isAdminUser()` from the server
+   * environment, never by a claim a client could ask to have set.
+   */
+  isAdminClaim: boolean;
+  source: CredentialSource;
 }
 
 export interface ResolvedAuth {

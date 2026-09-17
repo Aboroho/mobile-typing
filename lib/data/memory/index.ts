@@ -77,12 +77,6 @@ class MemoryUsers implements UserRepo {
     return { ...next };
   }
 
-  async updatePassword(userId: string, passwordHash: string, passwordSalt: string): Promise<void> {
-    const record = this.store.get(userId);
-    if (!record) return;
-    this.store.set(userId, { ...record, passwordHash, passwordSalt, updatedAt: nowIso() });
-  }
-
   async list(params: ListUsersParams): Promise<Cursor<AdminUserRow>> {
     const query = params.q?.trim().toLowerCase();
     const filtered = values(this.store)

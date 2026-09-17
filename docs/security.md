@@ -52,22 +52,42 @@ else.
 
 ## Credentials
 
-| Provider | Behaviour |
+Authentication is Firebase Authentication (email/password) in every environment.
+There is no development authentication provider and no fallback: without a
+Firebase project nobody can sign up or sign in, and the server says so by naming
+the missing variables.
+
+| Party | What it does |
 | --- | --- |
-| `AUTH_PROVIDER=dev` | Passwords hashed with **scrypt** (`crypto.scrypt`, 32-byte salt, 64-byte key, constant-time comparison). The session is an HS256 token signed with `DEV_SESSION_SECRET`, stored in an httpOnly, `SameSite=Lax`, `Secure` cookie. **Development only** — the provider refuses to initialise in a production build. |
-| `AUTH_PROVIDER=firebase` | The browser obtains a Firebase ID token; passwords never reach this API. The server verifies the token signature, audience, expiry and `uid`, and re-checks `authTime` (within 5 minutes) for reauthentication. |
+| Browser | `createUserWithEmailAndPassword` / `signInWithEmailAndPassword`. It is the only place a password exists, and Firebase is the only party that verifies it. The ID token is held in memory; a Firebase refresh token lives in IndexedDB. |
+| This API | `verifyIdToken` / `verifySessionCookie` with `checkRevoked: true`. It reads the uid and email **from the verified token** — never from a request body — and stores no credential of its own. Reauthentication additionally requires `auth_time` within five minutes. |
+| Session cookie | `createSessionCookie` on a fresh credential, `mt_session`, httpOnly, `SameSite=Lax`, `Secure` in production, 7 days. This is what SSE streams and page reloads authenticate with, because `EventSource` cannot send an `Authorization` header. |
 
 Login failures are deliberately indistinguishable: a wrong password, an unknown
-email and a **disabled account** all return the same 401 with the same message,
-so the endpoint cannot be used to enumerate accounts. `POST /auth/password-reset`
-always returns `{ sent: true }`.
+email and a **disabled account** all read the same, so nothing can be used to
+enumerate accounts. The first two are refused by Firebase with
+`auth/invalid-login-credentials`, which the browser maps to `unable to sign in
+with those details`; an account an administrator disabled cannot obtain a
+credential at all (`auth/user-disabled`), and a stale or revoked one is rejected
+by the API with the same wording. Account existence is still disclosed by
+Firebase's own `auth/email-already-in-use` at sign-up, which the browser maps to
+`that email address already has an account`; that is inherent to any working
+sign-up form.
+
+Password reset is Firebase's `sendPasswordResetEmail`, called from the browser —
+this application never held a password and has no reset endpoint.
+
+**Logout revokes credentials server-side** (`revokeRefreshTokens`) before the
+browser signs out, so a session cookie copied earlier stops working. That is
+Firebase's account-wide revocation: it ends the session on every device of that
+user, not just the one that logged out.
 
 ## Cookies
 
 | Cookie | Contents | Flags |
 | --- | --- | --- |
 | `mt_access` | Signed access session (audience `access-session`, epoch, optional uid) | `httpOnly`, `SameSite=Lax`, `Secure`, 30 min |
-| `mt_session` | Signed dev session token | `httpOnly`, `SameSite=Lax`, `Secure`, 7 days |
+| `mt_session` | Firebase session cookie (signed by Google) | `httpOnly`, `SameSite=Lax`, `Secure`, 7 days |
 
 Neither is readable from JavaScript. The access cookie is **bound to a user**
 when one is known: `accessBindingCookie()` returns `null` if the browser never
@@ -159,12 +179,14 @@ guarantee**, and the UI says so.
 
 ## Production checklist
 
-- `APP_SECRET` and `DEV_SESSION_SECRET` are long random values
-  (`openssl rand -hex 32`); both must be at least 16 characters.
+- `APP_SECRET` is a long random value (`openssl rand -hex 32`), at least 16
+  characters — it signs access sessions and challenge tokens.
 - `ADMIN_UID` is set (canonical) — `ADMIN_EMAIL` is a development convenience.
 - The bootstrap secret code (`SEED_SECRET_CODE`) has been changed in
   `/admin/settings` using the `rotate` strategy.
-- `DATA_PROVIDER=firestore`, `AUTH_PROVIDER=firebase`, `STORAGE_PROVIDER=firebase`.
+- `DATA_PROVIDER=firestore`, `STORAGE_PROVIDER=firebase`, and both Firebase
+  credential blocks set (web config for the browser, service account for the
+  Admin SDK). Email/Password is enabled in the Firebase console.
 - A TURN server is configured; STUN alone fails behind symmetric NATs.
 - Firestore and Storage rules are deployed, and `firebase deploy` is part of the
   release process.
