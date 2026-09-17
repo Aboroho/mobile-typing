@@ -8,7 +8,7 @@
  * deployment pipeline), or when you want to set the epoch deliberately.
  *
  *   FIREBASE_PROJECT_ID=… FIREBASE_CLIENT_EMAIL=… FIREBASE_PRIVATE_KEY=… \
- *   SECRET_CODE=mySecret1 node firebase/seed/seed-access-config.mjs
+ *   SEED_SECRET_CODE=mySecret1 node firebase/seed/seed-access-config.mjs
  *
  * The plaintext code is never printed: only a fingerprint of its salted digest.
  */
@@ -17,11 +17,13 @@ import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
 const SECRET_CODE_MAX_LENGTH = 15;
-const code = process.env.SECRET_CODE;
+// SEED_SECRET_CODE matches the key the application bootstraps from; SECRET_CODE
+// is still accepted as the legacy spelling.
+const code = process.env.SEED_SECRET_CODE ?? process.env.SECRET_CODE;
 const epoch = Number(process.env.ACCESS_EPOCH ?? 1);
 
 if (!code || code.length < 3 || code.length > SECRET_CODE_MAX_LENGTH || /\s/.test(code)) {
-  console.error(`SECRET_CODE must be 3-${SECRET_CODE_MAX_LENGTH} characters without whitespace.`);
+  console.error(`SEED_SECRET_CODE must be 3-${SECRET_CODE_MAX_LENGTH} characters without whitespace.`);
   process.exit(1);
 }
 if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_CLIENT_EMAIL || !process.env.FIREBASE_PRIVATE_KEY) {
