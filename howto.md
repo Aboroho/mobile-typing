@@ -78,6 +78,14 @@ Next.js loads `.env.local` automatically. **Never commit** `.env`, `.env.local`,
 or real secrets. Anything prefixed with `NEXT_PUBLIC_` is shipped to the browser
 and is public by design.
 
+> **Precedence trap.** Next.js reads `.env.local` *before* `.env`, and a key set
+> to an empty value still counts as set. So a copied template with blank
+> `NEXT_PUBLIC_FIREBASE_*` / `FIREBASE_*` lines silently hides the real
+> credentials in `.env`, and the server runs the Firebase providers with no
+> Firebase project. Keep the values in **one** file — `.env.local` — or delete
+> the blank lines from it. `npm run doctor` prints the file each value came from
+> and names every shadowed key.
+
 ### Minimum for local development
 
 ```env
@@ -170,23 +178,42 @@ change, which is usually faster than decoding the first failing request:
 
 ---
 
-## 5. Production / Firebase sketch
+## 5. Running on Firebase (locally or in production)
+
+The Firebase providers are not production-only. Point `npm run dev` at your
+project and everything — accounts, conversations, messages, media — is stored
+there instead of in process memory. Nothing else has to run on your machine: no
+emulator, no local database, no daemon. The Admin SDK talks to Firebase over
+HTTPS, and the browser talks to Firebase Auth directly.
 
 ```bash
-# 1. Fill Firebase client + Admin vars in the host (e.g. Vercel) env
-# 2. Switch providers
+# 1. Console, once per project:
+#    Authentication → Sign-in method → Email/Password → Enable
+#    Firestore Database → Create database (production mode)
+#    Storage → Get started (note the bucket name)
+#    Project settings → Service accounts → Generate new private key
+
+# 2. Put the web config + Admin credentials in ONE file (.env.local)
 DATA_PROVIDER=firestore
 AUTH_PROVIDER=firebase
 STORAGE_PROVIDER=firebase
-APP_ENV=production
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=<project-id>.firebasestorage.app
 APP_SECRET=<openssl rand -hex 32>
 
-# 3. Deploy rules
+# 3. Check it before relying on it — names every missing console step
+npm run doctor
+
+# 4. Deploy the rules and the composite indexes the queries need
+firebase use <project-id>       # once; writes .firebaserc (firebase.json is in the repo root)
 npm run firebase:deploy:rules
 
-# 4. Build
-npm run build && npm run start
+# 5. Run
+npm run dev                     # or, for a deployment: npm run build && npm run start
 ```
+
+`APP_ENV=production` belongs to a production deployment only: together with
+`NODE_ENV=production` it refuses the memory/dev providers outright, which is what
+you want on a server and not what you want while iterating locally.
 
 Step-by-step Firebase provisioning, TURN, and Vercel notes live in
 [`docs/deployment.md`](./docs/deployment.md).
@@ -202,6 +229,7 @@ Step-by-step Firebase provisioning, TURN, and Vercel notes live in
 | `npm test` | Unit + API tests (Vitest, memory providers) |
 | `npm run e2e` | Playwright (mobile + desktop viewports) |
 | `npm run seed` | Demo users against a running server |
+| `npm run doctor` | Verify the Firebase project, credentials and env precedence from this machine |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 

@@ -18,6 +18,9 @@ const localServer = {
   DEV_SESSION_SECRET: 'b2'.repeat(16),
 };
 
+/** Shaped like a real PKCS#8 key: a PEM block with a long base64 body. */
+const fakePrivateKey = `-----BEGIN PRIVATE KEY-----\\n${'MIIEvQIBADANBgkqhkiG9w0BAQEFAASC'.repeat(6)}\\n-----END PRIVATE KEY-----\\n`;
+
 /** A complete Firebase project: web config for the browser, service account for the server. */
 const firebaseServer = {
   NODE_ENV: 'production',
@@ -27,7 +30,7 @@ const firebaseServer = {
   STORAGE_PROVIDER: 'firebase',
   FIREBASE_PROJECT_ID: 'keypad-prod',
   FIREBASE_CLIENT_EMAIL: 'firebase-adminsdk@keypad-prod.iam.gserviceaccount.com',
-  FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n',
+  FIREBASE_PRIVATE_KEY: fakePrivateKey,
   APP_SECRET: 'c3'.repeat(16),
   DEV_SESSION_SECRET: 'd4'.repeat(16),
 };
@@ -98,6 +101,30 @@ describe('configuration diagnostics', () => {
       FIREBASE_CLIENT_EMAIL: 'firebase-adminsdk@keypad-prod.iam.gserviceaccount.com',
     });
     expect(reasons(issues)).toContain('firebase_admin_credentials_missing');
+  });
+
+  it('rejects the placeholder private key from .env.example', () => {
+    const issues = issuesFor({
+      ...localServer,
+      AUTH_PROVIDER: 'firebase',
+      FIREBASE_PROJECT_ID: 'keypad-prod',
+      FIREBASE_CLIENT_EMAIL: 'firebase-adminsdk@keypad-prod.iam.gserviceaccount.com',
+      FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----key-----END PRIVATE KEY-----\n',
+    });
+    const issue = issues.find((candidate) => candidate.reason === 'firebase_private_key_malformed');
+    expect(issue?.level).toBe('error');
+    // The message has to point at the two ways this happens in practice.
+    expect(issue?.message).toContain('Generate new private key');
+    expect(issue?.message).toContain('.env.local');
+  });
+
+  it('accepts a real key shape with escaped newlines, as dashboards paste it', () => {
+    expect(reasons(issuesFor(firebaseServer, firebaseClient))).toEqual([]);
+  });
+
+  it('flags a service-account client email that is not an email address', () => {
+    const issues = issuesFor({ ...firebaseServer, FIREBASE_CLIENT_EMAIL: 'keypad-prod' }, firebaseClient);
+    expect(reasons(issues)).toContain('firebase_client_email_malformed');
   });
 
   it('refuses fallback providers in a production build', () => {

@@ -2,6 +2,7 @@ import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
+import { parsePublicEnv } from '@mt/config';
 import { env } from '../env';
 import { logger } from '../logger';
 
@@ -46,11 +47,43 @@ export function getFirestoreDb(): Firestore {
   return cachedDb;
 }
 
+/**
+ * Resolves the bucket to use for media.
+ *
+ * The configured web-SDK bucket wins: projects created since Cloud Storage's
+ * 2024 default-bucket change are named `<project-id>.firebasestorage.app`, so
+ * deriving `<project-id>.appspot.com` from the project id alone targets a
+ * bucket that does not exist and every upload fails. The `appspot.com` shape is
+ * kept as the fallback for older projects, and `undefined` lets the SDK use its
+ * own default (application-default credentials / emulator).
+ */
+export function resolveStorageBucketName(
+  projectId: string | undefined,
+  configuredBucket: string | undefined,
+): string | undefined {
+  const configured = configuredBucket?.trim();
+  if (configured) return configured;
+  const id = projectId?.trim();
+  return id ? `${id}.appspot.com` : undefined;
+}
+
 export function getStorageBucket() {
   const { FIREBASE_PROJECT_ID } = env();
-  return FIREBASE_PROJECT_ID
-    ? getStorage().bucket(`${FIREBASE_PROJECT_ID}.appspot.com`)
-    : getStorage().bucket();
+  const name = resolveStorageBucketName(FIREBASE_PROJECT_ID, publicStorageBucket());
+  return name ? getStorage().bucket(name) : getStorage().bucket();
+}
+
+/**
+ * The bucket from the Firebase web config, if any. Read defensively: this is a
+ * `NEXT_PUBLIC_*` value parsed by a schema that can throw, and a storage call is
+ * the wrong place to surface an environment error.
+ */
+function publicStorageBucket(): string | undefined {
+  try {
+    return parsePublicEnv().NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getAdminAuth() {

@@ -37,6 +37,21 @@ const FALLBACK_PROVIDERS: Array<{ key: 'DATA_PROVIDER' | 'AUTH_PROVIDER' | 'STOR
 ];
 
 /**
+ * Whether a private key could plausibly be a service-account key: a PEM block
+ * with a base64 body. A real PKCS#8 key is around 1600 base64 characters, which
+ * is what separates it from the `key`, `...` and `xxxx` bodies that placeholders
+ * and half-pasted values contain.
+ */
+function privateKeyLooksUsable(privateKey: string): boolean {
+  if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privateKey)) return false;
+  const body = privateKey
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '')
+    .replace(/-----END [A-Z ]*PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+  return body.length >= 100 && /^[A-Za-z0-9+/=]+$/.test(body);
+}
+
+/**
  * Pure configuration review: given the parsed environment, list every setting
  * that will break a flow later on. Nothing here throws and nothing here reads
  * `process.env` directly, so the same rules run at boot (server), in tests, and
@@ -90,7 +105,33 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     });
   }
 
-  // 3. Fallback providers in a production build are refused at first use by
+  // 3. Credentials that are present but cannot possibly work. A placeholder key
+  //    from `.env.example` (or a real one shadowed by a blank/placeholder copy in
+  //    a higher-precedence env file) otherwise surfaces as a crypto error from
+  //    deep inside the Admin SDK, nowhere near its cause.
+  if (server.FIREBASE_PRIVATE_KEY && !privateKeyLooksUsable(server.FIREBASE_PRIVATE_KEY)) {
+    issues.push({
+      level: 'error',
+      reason: 'firebase_private_key_malformed',
+      message:
+        'FIREBASE_PRIVATE_KEY is set but is not a usable service-account key. Expected the PEM block from ' +
+        'Project settings → Service accounts → Generate new private key, on one line with newlines escaped as ' +
+        '\\n: "-----BEGIN PRIVATE KEY-----\\n…\\n-----END PRIVATE KEY-----\\n". This is usually the ' +
+        '.env.example placeholder left in place, or a placeholder in .env.local shadowing the real key in .env.',
+    });
+  }
+  if (server.FIREBASE_CLIENT_EMAIL && !server.FIREBASE_CLIENT_EMAIL.includes('@')) {
+    issues.push({
+      level: 'error',
+      reason: 'firebase_client_email_malformed',
+      message:
+        `FIREBASE_CLIENT_EMAIL ("${server.FIREBASE_CLIENT_EMAIL}") is not an email address. It is the ` +
+        '`client_email` from the service account key, normally ' +
+        'firebase-adminsdk-xxxxx@<project-id>.iam.gserviceaccount.com.',
+    });
+  }
+
+  // 4. Fallback providers in a production build are refused at first use by
   //    assertFallbackAllowed; say so at boot instead of on the first request.
   if (production) {
     for (const provider of FALLBACK_PROVIDERS) {
@@ -106,7 +147,7 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     }
   }
 
-  // 4. Placeholder / short signing secrets. Fatal in production, worth a nudge
+  // 5. Placeholder / short signing secrets. Fatal in production, worth a nudge
   //    anywhere else because sessions signed with a published secret are forgeable.
   for (const key of ['APP_SECRET', 'DEV_SESSION_SECRET'] as const) {
     const value = server[key];

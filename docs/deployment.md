@@ -83,7 +83,22 @@ firebase projects:create <project-id>
 firebase use <project-id>
 ```
 
-Enable **Authentication → Sign-in method → Email/Password**.
+Enable **Authentication → Sign-in method → Email/Password**. Without it the
+browser's `createUserWithEmailAndPassword` is refused with `OPERATION_NOT_ALLOWED`
+and registration cannot complete, while the Admin SDK keeps working — so the
+server looks healthy and only sign-up fails.
+
+Once the environment is filled in, check it from the machine that will run the
+server:
+
+```bash
+npm run doctor
+```
+
+It reports which file each value came from, initialises the Admin SDK, probes
+Firestore (including the conversation-list index), signs a throwaway user up
+through the Identity Toolkit and verifies its ID token, and uploads a probe
+object to Storage — deleting each one again. See `firebase/README.md` §6.
 
 ## 3. Firebase Authentication setup
 
@@ -105,7 +120,9 @@ so the claim is not the only line of defence.
 
 ## 4. Firestore setup
 
-Create the database in production mode. Deploy the composite indexes:
+Create the database in production mode. Deploy the composite indexes (the root
+`firebase.json` points the CLI at `firebase/firestore.indexes.json`; run
+`firebase use <project-id>` once first):
 
 ```bash
 firebase deploy --only firestore:indexes
@@ -113,10 +130,20 @@ firebase deploy --only firestore:indexes
 
 Without them, the conversation list, message pagination, call lookup and admin
 filters fail with a "missing index" error that names the index to create.
+`npm run doctor` runs the conversation-list query against an empty subcollection
+so a missing index is reported before a user hits it.
 
 ## 5. Storage setup
 
-Create a default bucket. Objects are written under
+Create a default bucket and put its exact name in
+`NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`. Projects created since Cloud Storage's
+2024 change use `<project-id>.firebasestorage.app`; older ones use
+`<project-id>.appspot.com`. The server prefers the configured name and falls back
+to the `appspot.com` shape (`resolveStorageBucketName` in `lib/firebase/admin.ts`),
+so a wrong or missing value means every upload targets a bucket that does not
+exist. `npm run doctor` tries both shapes and says which one is there.
+
+Objects are written under
 `media/{ownerId}/{conversationId|drafts}/{mediaId}.{ext}`. There are no public
 paths and no public URLs: retrieval always goes through an authorised route, or
 through a signed URL with a 60-second TTL minted by that route.
@@ -192,6 +219,10 @@ Vercel-specific constraints:
 | --- | --- |
 | `config.issue` lines on boot | The environment review (`lib/config/diagnostics.ts`) predicted a failure: a Firebase provider without credentials, placeholder secrets, or a fallback provider in a production build. The `detail` field names the variables to set |
 | Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | `AUTH_PROVIDER=firebase` but the browser could not produce an ID token: `NEXT_PUBLIC_FIREBASE_*` is unset (logged as `firebase_auth_without_client_config`), or the domain is not in Firebase Authorised domains. Locally, `AUTH_PROVIDER=dev` needs no Firebase project |
+| Credentials are in `.env` but the app behaves as if they were missing | `.env.local` is read first, and a key set to an empty value still counts as set, so a copied template hides the real values. `npm run doctor` prints the source file of every value and names each shadowed key |
+| `OPERATION_NOT_ALLOWED` on sign-up | Authentication → Sign-in method → Email/Password is not enabled. The Admin SDK works regardless, so the server looks healthy while only registration fails |
+| Uploads fail with `404` / "No such object" | Wrong bucket name: projects created since 2024 use `<project-id>.firebasestorage.app`, not `.appspot.com`. Set `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` to the name shown in the console |
+| `FIREBASE_PRIVATE_KEY` is set but the Admin SDK throws a crypto/JWT error | The key is the `.env.example` placeholder, was truncated, or its newlines were not escaped as `\n`. Logged at boot as `firebase_private_key_malformed` |
 | `Refusing to use the memory fallback in production` | `DATA_PROVIDER`/`AUTH_PROVIDER`/`STORAGE_PROVIDER` are not set to their Firebase values |
 | `Invalid environment: APP_SECRET: Too small` | `APP_SECRET` must be at least 16 characters |
 | Typing the code does nothing | The buffer is at most 15 characters and the match is case sensitive and consecutive. Check `/api/v1/access/status` for the current `maxLength` and `epoch` |

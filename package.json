@@ -23,6 +23,7 @@
     "e2e:install": "playwright install --with-deps chromium",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "seed": "node scripts/seed-dev.mjs",
+    "doctor": "node scripts/check-firebase.mjs",
     "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage.rules,firestore:indexes"
   },
   "dependencies": {
