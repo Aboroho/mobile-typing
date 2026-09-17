@@ -52,6 +52,11 @@ To create demo accounts against a running dev server:
 npm run seed
 ```
 
+The script reads the server's `AUTH_PROVIDER` from `/api/v1/health` and adapts:
+with `dev` it registers email + password directly, with `firebase` it signs up
+through the Identity Toolkit REST API (`NEXT_PUBLIC_FIREBASE_API_KEY`) and
+registers with the resulting Firebase ID token, exactly like the browser does.
+
 ## Commands
 
 | Command | Description |
@@ -69,7 +74,7 @@ npm run seed
 | `npm run e2e:install` | Download Chromium for Playwright (once) |
 | `npm run e2e` | Playwright end-to-end tests (starts the dev server) |
 | `npm run verify` | typecheck → lint → test → build |
-| `npm run seed` | Register demo users through the public API |
+| `npm run seed` | Register demo users through the public API (works with both auth providers) |
 | `npm run firebase:deploy:rules` | Deploy Firestore/Storage rules and indexes |
 
 ### Deploying

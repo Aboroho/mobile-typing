@@ -54,6 +54,16 @@ account through the public API, and prints the admin uid for `ADMIN_UID`. The
 secret code typed to unlock the gate comes from `SEED_SECRET_CODE`. The script
 refuses to run when `ADMIN_EMAIL` or `ADMIN_PASSWORD` is unset.
 
+How the accounts are created follows the server's `AUTH_PROVIDER`:
+
+| Server | What the seed does |
+| --- | --- |
+| `AUTH_PROVIDER=dev` (default) | Registers email + password through `/api/v1/auth/register`. |
+| `AUTH_PROVIDER=firebase` | Signs up / signs in through the Identity Toolkit REST API with `NEXT_PUBLIC_FIREBASE_API_KEY` (the same call the browser SDK makes), then registers with the resulting Firebase ID token. Without that key the seed stops with an explanatory message instead of a bare 401. |
+
+Re-running the seed is safe: existing accounts are picked up through `/login`
+rather than registered again, and `ADMIN_UID` is printed either way.
+
 ---
 
 ## 3. The `.env` file
@@ -120,6 +130,8 @@ The app is designed to **degrade safely** instead of crashing the public UI.
 | Word list file missing (`public/typing-words/*.txt`) | Start test still works — a built-in English/Bengali fallback list is used and a small warning is shown. |
 | `DATA_PROVIDER=firestore` but no Admin credentials | Server routes that touch the database throw a clear error. Switch back to `memory` or fill `FIREBASE_*`. |
 | `AUTH_PROVIDER=firebase` but no `NEXT_PUBLIC_FIREBASE_*` | Client auth cannot start. Use `AUTH_PROVIDER=dev` locally. |
+| `npm run seed` fails with `complete the Firebase sign-up first` | The server runs `AUTH_PROVIDER=firebase`, so `/api/v1/auth/register` needs a Firebase ID token that only the client SDK has. Set `NEXT_PUBLIC_FIREBASE_API_KEY` so the seed can obtain one, or seed against `AUTH_PROVIDER=dev`. |
+| `npm run seed` fails with 429 `RATE_LIMITED` | Registration is limited to 5 calls / 10 min / IP (`auth:register`). Wait for the window, or restart the dev server to reset the in-memory counters. |
 | No `ADMIN_UID` / `ADMIN_EMAIL` | Admin routes return forbidden; the rest of the app is fine. Run `npm run seed` then set `ADMIN_UID`. |
 | No TURN server | Calls may work on the same LAN via STUN; mobile networks usually need TURN. |
 | Empty Firestore (fresh project) | Access config is bootstrapped from `SEED_SECRET_CODE` on first boot (`instrumentation.ts`). |
