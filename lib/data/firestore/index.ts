@@ -118,7 +118,9 @@ class FirestoreUsers implements UserRepo {
   }
 
   async create(record: UserRecord): Promise<UserRecord> {
-    await this.col.doc(record.id).set(stripUndefined({ ...record } as unknown as DocumentData));
+    await this.col.doc(record.id).set(
+      stripUndefined({ ...record, emailLower: record.email.trim().toLowerCase() } as unknown as DocumentData),
+    );
     return record;
   }
 

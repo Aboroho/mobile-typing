@@ -47,6 +47,25 @@ export function parsePublicEnv(env: NodeJS.ProcessEnv = process.env): PublicEnv 
   return parsed.data;
 }
 
+/** The web SDK needs the complete Auth configuration, not just an API key. */
 export function hasFirebaseClientConfig(publicEnv: PublicEnv): boolean {
-  return Boolean(publicEnv.NEXT_PUBLIC_FIREBASE_API_KEY);
+  return Boolean(
+    publicEnv.NEXT_PUBLIC_FIREBASE_API_KEY &&
+      publicEnv.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN &&
+      publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
+      publicEnv.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID &&
+      publicEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
+  );
+}
+
+/** True when a deployment has started configuring Firebase but is incomplete. */
+export function hasPartialFirebaseClientConfig(publicEnv: PublicEnv): boolean {
+  const values = [
+    publicEnv.NEXT_PUBLIC_FIREBASE_API_KEY,
+    publicEnv.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    publicEnv.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    publicEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
+  ];
+  return values.some(Boolean) && !hasFirebaseClientConfig(publicEnv);
 }

@@ -1,6 +1,7 @@
 import { AppError } from '@mt/domain';
 import { getAdminAuth } from '../firebase/admin';
 import { getData } from '../data';
+import { logger } from '../logger';
 import type { AuthProvider, AuthUserRecord, VerifiedToken } from './types';
 
 /**
@@ -21,7 +22,14 @@ export function createFirebaseAuthProvider(): AuthProvider {
           tokenId: decoded.sub,
           isAdminClaim: decoded.role === 'admin' || decoded.admin === true,
         };
-      } catch {
+      } catch (error) {
+        // Never log the token or the SDK error verbatim: Firebase errors can
+        // include request details. The event still gives operators a useful
+        // signal when project/audience, expiry, revocation, or Admin config is
+        // wrong.
+        logger.warn('auth.firebase_token_verification_failed', {
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
         return null;
       }
     },
