@@ -19,14 +19,15 @@ export function isProduction(): boolean {
 }
 
 /**
- * Development-only fallbacks (in-memory data, dev auth) must never be reachable
- * from a production deployment. Every fallback provider calls this.
+ * Development-only fallbacks (in-memory data and storage) must never be
+ * reachable from a production deployment. Every fallback provider calls this.
+ * Authentication has no fallback to refuse: it is always Firebase.
  */
 export function assertFallbackAllowed(provider: string): void {
   if (isProduction()) {
     throw new Error(
       `Refusing to use the ${provider} fallback in production. Configure Firebase ` +
-        '(DATA_PROVIDER=firestore, AUTH_PROVIDER=firebase, STORAGE_PROVIDER=firebase).',
+        '(DATA_PROVIDER=firestore, STORAGE_PROVIDER=firebase).',
     );
   }
 }

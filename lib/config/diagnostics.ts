@@ -22,17 +22,18 @@ export interface ConfigIssue {
 /** Secrets shipped in `.env.example` / used as schema defaults. */
 const PLACEHOLDER_SECRETS = new Set([
   'change-me-to-a-32-byte-random-hex',
-  'change-me-too-32-byte-random-hex',
   'dev-only-insecure-secret-change-me',
-  'dev-only-insecure-session-secret-change',
 ]);
 
 /** Anything shorter than this cannot have come from `openssl rand -hex 32`. */
 const PRODUCTION_SECRET_MIN_LENGTH = 32;
 
-const FALLBACK_PROVIDERS: Array<{ key: 'DATA_PROVIDER' | 'AUTH_PROVIDER' | 'STORAGE_PROVIDER'; local: string; production: string }> = [
+/**
+ * Providers that may fall back to a local implementation outside production.
+ * Authentication is not in this list: it has no fallback, Firebase is required.
+ */
+const FALLBACK_PROVIDERS: Array<{ key: 'DATA_PROVIDER' | 'STORAGE_PROVIDER'; local: string; production: string }> = [
   { key: 'DATA_PROVIDER', local: 'memory', production: 'firestore' },
-  { key: 'AUTH_PROVIDER', local: 'dev', production: 'firebase' },
   { key: 'STORAGE_PROVIDER', local: 'memory', production: 'firebase' },
 ];
 
@@ -61,29 +62,28 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
   const issues: ConfigIssue[] = [];
   const production = isProduction(server);
 
-  // 1. Firebase Auth on the server, but the browser has no Firebase app to
-  //    authenticate against. lib/client/auth-client.ts silently falls back to
-  //    the dev client, so no ID token ever reaches the API and every sign-up /
-  //    sign-in is rejected with UNAUTHENTICATED ("complete the Firebase
-  //    sign-up first"). This is the single most confusing misconfiguration.
-  if (server.AUTH_PROVIDER === 'firebase' && !hasFirebaseClientConfig(publicEnv)) {
+  // 1. Authentication is Firebase Authentication, so without the web config the
+  //    browser has no Firebase app to authenticate against: no ID token ever
+  //    reaches the API and every sign-up / sign-in is rejected with
+  //    UNAUTHENTICATED. This is the single most confusing misconfiguration, and
+  //    it is now unconditional — there is no provider switch to fall back on.
+  if (!hasFirebaseClientConfig(publicEnv)) {
     issues.push({
       level: 'error',
       reason: 'firebase_auth_without_client_config',
       message:
-        'AUTH_PROVIDER=firebase but the Firebase web config is missing (NEXT_PUBLIC_FIREBASE_API_KEY, ' +
-        'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
-        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID, NEXT_PUBLIC_FIREBASE_APP_ID). The browser cannot obtain a ' +
-        'Firebase ID token, so registration and login fail with UNAUTHENTICATED ("complete the Firebase sign-up ' +
-        'first"). Fill in the NEXT_PUBLIC_FIREBASE_* values, or use AUTH_PROVIDER=dev for local development.',
+        'The Firebase web configuration is missing, so the browser cannot authenticate anybody. ' +
+        'NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
+        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID and NEXT_PUBLIC_FIREBASE_APP_ID must all be set (blank values ' +
+        'count as unset); until then registration and login fail with UNAUTHENTICATED ("complete the Firebase ' +
+        'sign-up first"). Copy them from Firebase console → Project settings → Your apps → SDK setup and configuration.',
     });
   }
 
   // 2. A client and Admin SDK pointed at different projects can create a valid
-  // Firebase account whose token the backend can never verify. Catch that
-  // deployment error before it presents as a generic registration 401.
+  //    Firebase account whose token the backend can never verify. Catch that
+  //    deployment error before it presents as a generic registration 401.
   if (
-    server.AUTH_PROVIDER === 'firebase' &&
     hasFirebaseClientConfig(publicEnv) &&
     server.FIREBASE_PROJECT_ID &&
     publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
@@ -98,16 +98,12 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     });
   }
 
-  // 3. Any Firebase-backed provider needs Admin credentials; without them the
-  //    first request that touches data/auth/storage throws a 500.
-  const needsAdmin =
-    server.DATA_PROVIDER === 'firestore' ||
-    server.AUTH_PROVIDER === 'firebase' ||
-    server.STORAGE_PROVIDER === 'firebase';
-  if (needsAdmin && !hasFirebaseAdminCredentials(server)) {
+  // 3. Verifying a Firebase credential needs the Admin SDK, so the service
+  //    account is required by every deployment; data and storage add to that.
+  if (!hasFirebaseAdminCredentials(server)) {
     const selected = [
+      'Firebase Authentication',
       server.DATA_PROVIDER === 'firestore' ? 'DATA_PROVIDER=firestore' : null,
-      server.AUTH_PROVIDER === 'firebase' ? 'AUTH_PROVIDER=firebase' : null,
       server.STORAGE_PROVIDER === 'firebase' ? 'STORAGE_PROVIDER=firebase' : null,
     ]
       .filter(Boolean)
@@ -118,13 +114,13 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
       message:
         `The Firebase Admin SDK credentials are incomplete, but they are needed by ${selected}. ` +
         'FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must all be set (blank ' +
-        'values count as unset); until then these requests fail with a 500. Add the service account key ' +
-        'from Project settings → Service accounts, or use DATA_PROVIDER=memory, AUTH_PROVIDER=dev and ' +
-        'STORAGE_PROVIDER=memory for local development.',
+        'values count as unset); until then no ID token or session cookie can be verified and these requests ' +
+        'fail with a 500. Add the service account key from Project settings → Service accounts → Generate new ' +
+        'private key, with newlines escaped as \\n on a single line.',
     });
   }
 
-  // 3. Credentials that are present but cannot possibly work. A placeholder key
+  // 4. Credentials that are present but cannot possibly work. A placeholder key
   //    from `.env.example` (or a real one shadowed by a blank/placeholder copy in
   //    a higher-precedence env file) otherwise surfaces as a crypto error from
   //    deep inside the Admin SDK, nowhere near its cause.
@@ -150,7 +146,7 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     });
   }
 
-  // 4. Fallback providers in a production build are refused at first use by
+  // 5. Fallback providers in a production build are refused at first use by
   //    assertFallbackAllowed; say so at boot instead of on the first request.
   if (production) {
     for (const provider of FALLBACK_PROVIDERS) {
@@ -166,9 +162,9 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
     }
   }
 
-  // 5. Placeholder / short signing secrets. Fatal in production, worth a nudge
+  // 6. Placeholder / short signing secrets. Fatal in production, worth a nudge
   //    anywhere else because sessions signed with a published secret are forgeable.
-  for (const key of ['APP_SECRET', 'DEV_SESSION_SECRET'] as const) {
+  for (const key of ['APP_SECRET'] as const) {
     const value = server[key];
     if (PLACEHOLDER_SECRETS.has(value)) {
       issues.push({

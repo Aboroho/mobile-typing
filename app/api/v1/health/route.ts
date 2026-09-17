@@ -13,7 +13,7 @@ export const GET = routeHandler('/api/v1/health', async () => {
     ok: true,
     version: '1.0.0',
     dataProvider: data.name,
-    authProvider: env().AUTH_PROVIDER,
+    authProvider: 'firebase',
     storageProvider: env().STORAGE_PROVIDER,
     time: new Date().toISOString(),
     access: {

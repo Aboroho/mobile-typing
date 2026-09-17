@@ -22,7 +22,7 @@ export async function register(): Promise<void> {
       epoch: config.epoch,
       maxLength: config.maxLength,
       dataProvider: process.env.DATA_PROVIDER ?? 'memory',
-      authProvider: process.env.AUTH_PROVIDER ?? 'dev',
+      authProvider: 'firebase',
     });
   } catch (error) {
     logger.error('boot.failed', { error: String(error) });

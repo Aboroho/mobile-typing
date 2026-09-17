@@ -29,7 +29,6 @@ and any future client, and no timezone conversion is needed anywhere. See
 | `role` | `'user' \| 'admin'` | Informational only — administrator identity comes from `ADMIN_UID` |
 | `isAdmin` | boolean | Derived from the environment on every read |
 | `lastLoginAt` | string \| null | |
-| `passwordHash`, `passwordSalt` | string \| null | **Dev auth only.** Never written when `AUTH_PROVIDER=firebase`; always stripped by `stripSecrets` before any admin response |
 | `disabledReason` | string \| null | |
 | `createdAt`, `updatedAt` | string | |
 

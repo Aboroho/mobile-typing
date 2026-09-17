@@ -25,28 +25,38 @@ use that prefix.
 | Variable | Values | Notes |
 | --- | --- | --- |
 | `DATA_PROVIDER` | `memory` \| `firestore` | `memory` keeps everything in process memory; refuses to run in production |
-| `AUTH_PROVIDER` | `dev` \| `firebase` | `dev` uses scrypt-hashed passwords in the database |
 | `STORAGE_PROVIDER` | `memory` \| `firebase` | `memory` keeps bytes in process memory |
 
-### Firebase client (public)
+### Firebase client (public) — required in every environment
 
 `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`,
 `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`,
 `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID` — copy
-from Project settings → *Your apps* → SDK setup and configuration.
+from Project settings → *Your apps* → SDK setup and configuration. The browser
+uses these to sign users up and in; without them no one can authenticate.
 
-### Firebase Admin (server only)
+Enable **Authentication → Sign-in method → Email/Password** in the console, and
+add every deployment domain under **Authentication → Settings → Authorised
+domains**.
+
+### Firebase Admin (server only) — required in every environment
 
 `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
 Generate at Project settings → **Service accounts** → *Generate new private key*.
-When pasting into a dashboard field, escape newlines as `\n`.
+When pasting into a dashboard field, escape newlines as `\n`. The API needs these
+to verify ID tokens and mint session cookies, so they are required even when data
+and storage are in memory.
+
+`FIREBASE_AUTH_EMULATOR_HOST=http://127.0.0.1:9099` is optional and only for
+local work: it points the Admin SDK at the Auth emulator. Both halves must agree
+— the browser needs the matching config, so an emulator-backed client is a client
+decision, not a server fallback.
 
 ### Secrets
 
 | Variable | Notes |
 | --- | --- |
 | `APP_SECRET` | Signs access challenges and access sessions. ≥ 16 characters; use `openssl rand -hex 32` |
-| `DEV_SESSION_SECRET` | Signs dev session cookies. Same rules. Only used when `AUTH_PROVIDER=dev` |
 | `SECRET_CODE_MAX_LENGTH` | `15`. The rolling keystroke buffer never exceeds this, so a longer code could never match |
 | `SEED_SECRET_CODE` | Bootstrap code, applied on first boot until an administrator changes it. Change it immediately after deploying |
 
@@ -218,12 +228,12 @@ Vercel-specific constraints:
 | Symptom | Cause / fix |
 | --- | --- |
 | `config.issue` lines on boot | The environment review (`lib/config/diagnostics.ts`) predicted a failure: a Firebase provider without credentials, placeholder secrets, or a fallback provider in a production build. The `detail` field names the variables to set |
-| Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | `AUTH_PROVIDER=firebase` but the browser could not produce an ID token: `NEXT_PUBLIC_FIREBASE_*` is unset (logged as `firebase_auth_without_client_config`), or the domain is not in Firebase Authorised domains. Locally, `AUTH_PROVIDER=dev` needs no Firebase project |
+| Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | The browser could not produce an ID token: a `NEXT_PUBLIC_FIREBASE_*` variable is unset (logged as `firebase_auth_without_client_config`, which names them), or the domain is not in Firebase → Authentication → Authorised domains. Authentication has no offline fallback, so a missing Firebase project always shows up here |
 | Credentials are in `.env` but the app behaves as if they were missing | `.env.local` is read first, and a key set to an empty value still counts as set, so a copied template hides the real values. `npm run doctor` prints the source file of every value and names each shadowed key |
 | `OPERATION_NOT_ALLOWED` on sign-up | Authentication → Sign-in method → Email/Password is not enabled. The Admin SDK works regardless, so the server looks healthy while only registration fails |
 | Uploads fail with `404` / "No such object" | Wrong bucket name: projects created since 2024 use `<project-id>.firebasestorage.app`, not `.appspot.com`. Set `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` to the name shown in the console |
 | `FIREBASE_PRIVATE_KEY` is set but the Admin SDK throws a crypto/JWT error | The key is the `.env.example` placeholder, was truncated, or its newlines were not escaped as `\n`. Logged at boot as `firebase_private_key_malformed` |
-| `Refusing to use the memory fallback in production` | `DATA_PROVIDER`/`AUTH_PROVIDER`/`STORAGE_PROVIDER` are not set to their Firebase values |
+| `Refusing to use the memory fallback in production` | `DATA_PROVIDER`/`STORAGE_PROVIDER` are not set to their Firebase values |
 | `Invalid environment: APP_SECRET: Too small` | `APP_SECRET` must be at least 16 characters |
 | Typing the code does nothing | The buffer is at most 15 characters and the match is case sensitive and consecutive. Check `/api/v1/access/status` for the current `maxLength` and `epoch` |
 | Login succeeds but the chat does not open | The access session is missing, expired, or from a previous epoch. `GET /api/v1/access/status` returns `unlocked: false` in that case |

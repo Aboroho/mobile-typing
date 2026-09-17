@@ -55,7 +55,6 @@ describe('doctor script', () => {
     const result = await doctor({
       '.env': [
         'DATA_PROVIDER=firestore',
-        'AUTH_PROVIDER=firebase',
         'STORAGE_PROVIDER=firebase',
         'NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSy-real-key',
         'FIREBASE_PROJECT_ID=keypad-prod',
@@ -79,7 +78,7 @@ describe('doctor script', () => {
 
   it('flags an unterminated quote instead of treating it as a value', async () => {
     const result = await doctor({
-      '.env.local': ['NEXT_PUBLIC_FIREBASE_PROJECT_ID="', 'AUTH_PROVIDER=firebase', ''].join('\n'),
+      '.env.local': ['NEXT_PUBLIC_FIREBASE_PROJECT_ID="', ''].join('\n'),
     });
 
     expect(result.code).toBe(1);
@@ -91,7 +90,6 @@ describe('doctor script', () => {
     const result = await doctor({
       '.env.local': [
         'DATA_PROVIDER=firestore',
-        'AUTH_PROVIDER=firebase',
         'STORAGE_PROVIDER=firebase',
         'NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSy-real-key',
         'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=keypad-prod.firebaseapp.com',
@@ -115,7 +113,7 @@ describe('doctor script', () => {
 
   it('says plainly that nothing is stored in Firebase while the dev providers are selected', async () => {
     const result = await doctor({
-      '.env.local': ['DATA_PROVIDER=memory', 'AUTH_PROVIDER=dev', 'STORAGE_PROVIDER=memory', ''].join('\n'),
+      '.env.local': ['DATA_PROVIDER=memory', 'STORAGE_PROVIDER=memory', ''].join('\n'),
     });
 
     expect(result.code).toBe(1);
@@ -130,7 +128,6 @@ describe('doctor script', () => {
     const result = await doctor(
       {
         '.env.local': [
-          'AUTH_PROVIDER=dev',
           'DATA_PROVIDER=memory',
           'STORAGE_PROVIDER=memory',
           'SEED_SECRET_CODE=opensesame',

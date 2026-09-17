@@ -19,9 +19,14 @@ export const serverEnvSchema = z.object({
   APP_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   NEXT_PUBLIC_APP_URL: z.string().default('http://localhost:3000'),
 
-  /** `memory` powers local development and tests, `firestore` is production. */
+  /**
+   * `memory` powers local development and tests, `firestore` is production.
+   *
+   * There is no equivalent switch for authentication: Firebase Authentication is
+   * the only provider, so `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` and
+   * `FIREBASE_PRIVATE_KEY` are required to sign anybody in.
+   */
   DATA_PROVIDER: z.enum(['memory', 'firestore']).default('memory'),
-  AUTH_PROVIDER: z.enum(['dev', 'firebase']).default('dev'),
   STORAGE_PROVIDER: z.enum(['memory', 'firebase']).default('memory'),
 
   FIREBASE_PROJECT_ID: optionalNonEmpty,
@@ -35,7 +40,6 @@ export const serverEnvSchema = z.object({
 
   /** Signs access sessions and challenge tokens. Must be set in production. */
   APP_SECRET: z.string().min(16).default('dev-only-insecure-secret-change-me'),
-  DEV_SESSION_SECRET: z.string().min(16).default('dev-only-insecure-session-secret-change'),
 
   SECRET_CODE_MAX_LENGTH: z.coerce.number().int().min(3).max(64).default(SECRET_CODE_MAX_LENGTH),
   /** Bootstrap code used only when no administrator has configured one yet. */

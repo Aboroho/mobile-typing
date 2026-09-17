@@ -21,7 +21,6 @@ import type {
   LoginInput,
   MarkConversationReadInput,
   MarkDeliveredInput,
-  ReauthenticateInput,
   RegisterInput,
   SendMediaMessageInput,
   SendMessageInput,
@@ -247,17 +246,20 @@ export function createApiClient(init: ApiClientInit = {}) {
 
     auth: {
       me: () => request<{ user: SessionUser | null }>('/api/v1/auth/me'),
+      /**
+       * Creates the application profile for the Firebase account the browser has
+       * just signed up. The credential is the `Authorization: Bearer` ID token
+       * this client attaches; a password is never part of a request body.
+       */
       register: (input: RegisterInput) =>
         request<AuthResult>('/api/v1/auth/register', { method: 'POST', body: input }),
       login: (input: LoginInput) =>
         request<AuthResult>('/api/v1/auth/login', { method: 'POST', body: input }),
       logout: () => request<{ loggedOut: boolean }>('/api/v1/auth/logout', { method: 'POST' }),
-      reauthenticate: (input: ReauthenticateInput) =>
-        request<ReauthenticateResult>('/api/v1/auth/reauthenticate', { method: 'POST', body: input }),
+      reauthenticate: () =>
+        request<ReauthenticateResult>('/api/v1/auth/reauthenticate', { method: 'POST' }),
       updateProfile: (input: UpdateProfileInput) =>
         request<{ user: SessionUser }>('/api/v1/auth/profile', { method: 'PATCH', body: input }),
-      resetPassword: (email: string) =>
-        request<{ sent: boolean }>('/api/v1/auth/password-reset', { method: 'POST', body: { email } }),
     },
 
     users: {

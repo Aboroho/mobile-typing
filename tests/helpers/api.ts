@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { POST as challengeRoute } from '@/app/api/v1/access/challenge/route';
 import { POST as unlockRoute } from '@/app/api/v1/access/unlock/route';
+import { POST as loginRoute } from '@/app/api/v1/auth/login/route';
 import { POST as registerRoute } from '@/app/api/v1/auth/register/route';
+import { POST as reauthenticateRoute } from '@/app/api/v1/auth/reauthenticate/route';
+import { fakeAdminAuth } from './firebase-auth';
 
 /** A route handler as Next.js exposes it: `params` is typed per route. */
 export type Handler<P = Record<string, string>> = (
@@ -35,21 +38,37 @@ export async function call<T = unknown>(
   return { status: response.status, body };
 }
 
+/**
+ * A browser's credentials: the cookies it holds plus the Firebase ID token the
+ * client SDK would attach as `Authorization: Bearer`.
+ */
 export interface Jar {
   cookies: Record<string, string>;
+  token: string | null;
   header(): string;
 }
 
-export function jar(): Jar {
+export function jar(token: string | null = null): Jar {
   const cookies: Record<string, string> = {};
   return {
     cookies,
+    token,
     header() {
       return Object.entries(cookies)
         .map(([name, value]) => `${name}=${value}`)
         .join('; ');
     },
   };
+}
+
+/**
+ * Keeps only the httpOnly session cookie, the way an `EventSource` request does
+ * (it cannot set an `Authorization` header). Used to prove the session cookie
+ * alone authorises a request.
+ */
+export function cookieOnly(target: Jar): Jar {
+  target.token = null;
+  return target;
 }
 
 /** Absorbs Set-Cookie headers, the way a browser would. */
@@ -65,6 +84,15 @@ export function absorb(response: Response, target: Jar): void {
   }
 }
 
+function headersFor(target: Jar | undefined, extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (!target) return headers;
+  const cookie = target.header();
+  if (cookie) headers.Cookie = cookie;
+  if (target.token) headers.Authorization = `Bearer ${target.token}`;
+  return headers;
+}
+
 export function jsonRequest(
   method: string,
   path: string,
@@ -73,10 +101,7 @@ export function jsonRequest(
 ): Request {
   return new Request(`http://localhost:3000${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(target ? { Cookie: target.header() } : {}),
-    },
+    headers: headersFor(target, { 'Content-Type': 'application/json' }),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
@@ -91,10 +116,7 @@ export function queryRequest(
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
-  return new Request(url, {
-    method,
-    headers: target ? { Cookie: target.header() } : {},
-  });
+  return new Request(url, { method, headers: headersFor(target) });
 }
 
 /** Query params the way Next hands them to a GET handler. */
@@ -139,12 +161,30 @@ export async function unlockJar(target: Jar = jar()): Promise<Jar> {
 
 export interface TestUser {
   jar: Jar;
+  /** Application user id — the Firebase uid. */
   id: string;
   email: string;
   name: string;
+  password: string;
+  /** The Firebase uid, so tests can compare it with the application id. */
+  uid: string;
 }
 
-/** Unlock + register in one step, returning a ready-to-use session. */
+interface AuthResponse {
+  data?: {
+    user: { id: string; email: string; name: string; isAdmin: boolean };
+    accessGranted: boolean;
+    token?: string | null;
+    cookieSession?: boolean;
+  };
+  error?: { code: string; message: string };
+}
+
+/**
+ * Unlock + register, in the order the browser does it:
+ * Firebase creates the account and returns an ID token, then the API turns that
+ * verified identity into an application profile and a session cookie.
+ */
 export async function registerUser(options: {
   name: string;
   email: string;
@@ -152,26 +192,78 @@ export async function registerUser(options: {
 }): Promise<TestUser> {
   const password = options.password ?? 'CorrectHorse1!';
   const target = await unlockJar();
+  const { uid, idToken } = fakeAdminAuth.signUpWithPassword({
+    email: options.email,
+    password,
+    displayName: options.name,
+  });
+  target.token = idToken;
+
   const response = await registerRoute(
     jsonRequest(
       'POST',
       '/api/v1/auth/register',
-      {
-        name: options.name,
-        email: options.email,
-        password,
-        confirmPassword: password,
-      },
+      // The body carries no password: Firebase already verified it in the browser.
+      { name: options.name, email: options.email },
       target,
     ),
   );
   absorb(response, target);
-  const body = (await response.json()) as {
-    data?: { user: { id: string; email: string; name: string; isAdmin: boolean }; accessGranted: boolean };
-    error?: { message: string };
-  };
+  const body = (await response.json()) as AuthResponse;
   if (response.status !== 201 || !body.data) {
     throw new Error(`register failed (${response.status}): ${body.error?.message ?? 'unknown'}`);
   }
-  return { jar: target, id: body.data.user.id, email: body.data.user.email, name: body.data.user.name };
+  return {
+    jar: target,
+    id: body.data.user.id,
+    email: body.data.user.email,
+    name: body.data.user.name,
+    password,
+    uid,
+  };
+}
+
+/** Unlock + sign in with Firebase, then open the application session. */
+export async function loginUser(options: {
+  email: string;
+  password?: string;
+  target?: Jar;
+}): Promise<TestUser> {
+  const password = options.password ?? 'CorrectHorse1!';
+  const target = options.target ?? (await unlockJar());
+  const { uid, idToken } = fakeAdminAuth.signInWithPassword(options.email, password);
+  target.token = idToken;
+
+  const response = await loginRoute(
+    jsonRequest('POST', '/api/v1/auth/login', { email: options.email }, target),
+  );
+  absorb(response, target);
+  const body = (await response.json()) as AuthResponse;
+  if (response.status !== 200 || !body.data) {
+    throw new Error(`login failed (${response.status}): ${body.error?.message ?? 'unknown'}`);
+  }
+  return {
+    jar: target,
+    id: body.data.user.id,
+    email: body.data.user.email,
+    name: body.data.user.name,
+    password,
+    uid,
+  };
+}
+
+/**
+ * The third access branch: prove the password again to Firebase, then bind the
+ * access session. Refreshes the jar's ID token, as the browser SDK would.
+ */
+export async function reauthenticateUser(user: TestUser, password: string = user.password): Promise<void> {
+  const { idToken } = fakeAdminAuth.reauthenticateWithPassword(user.uid, password);
+  user.jar.token = idToken;
+  const response = await reauthenticateRoute(
+    jsonRequest('POST', '/api/v1/auth/reauthenticate', {}, user.jar),
+  );
+  absorb(response, user.jar);
+  if (response.status !== 200) {
+    throw new Error(`reauthenticate failed: ${response.status}`);
+  }
 }

@@ -22,14 +22,3 @@ export function newId(prefix = ''): string {
 export function newUid(): string {
   return newId('u');
 }
-
-/** Deterministic uid for the development auth provider (stable across restarts). */
-export function deterministicUid(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < normalized.length; i += 1) {
-    hash ^= normalized.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `dev_${hash.toString(36)}_${normalized.length.toString(36)}`;
-}

@@ -42,10 +42,11 @@ export function reportConfigIssues(phase?: string): ConfigIssue[] {
 }
 
 /**
- * Whether the browser can authenticate with Firebase at all. The client falls
- * back to the dev auth adapter when `NEXT_PUBLIC_FIREBASE_*` is unset
- * (lib/client/auth-client.ts), so a server running `AUTH_PROVIDER=firebase`
- * would otherwise reject every request without explaining why.
+ * Whether the browser can authenticate with Firebase at all. Without
+ * `NEXT_PUBLIC_FIREBASE_*` the auth client refuses to initialise
+ * (lib/client/auth-client.ts), so no ID token ever reaches the API and every
+ * request is rejected — this lets the server say why in its own log instead of
+ * answering a bare 401.
  */
 export function firebaseClientConfigured(): boolean {
   try {

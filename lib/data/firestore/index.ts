@@ -143,10 +143,6 @@ class FirestoreUsers implements UserRepo {
     return this.getById(userId);
   }
 
-  async updatePassword(userId: string, passwordHash: string, passwordSalt: string): Promise<void> {
-    await this.col.doc(userId).set({ passwordHash, passwordSalt, updatedAt: nowIso() }, { merge: true });
-  }
-
   async list(params: ListUsersParams): Promise<Cursor<AdminUserRow>> {
     let query: Query<DocumentData> = this.col;
     if (params.status) query = query.where('status', '==', params.status);
