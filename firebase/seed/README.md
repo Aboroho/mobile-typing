@@ -16,7 +16,7 @@ it needs on first boot.
 
 ```bash
 FIREBASE_PROJECT_ID=… FIREBASE_CLIENT_EMAIL=… FIREBASE_PRIVATE_KEY=… \
-SECRET_CODE=mySecret1 node firebase/seed/seed-access-config.mjs
+SEED_SECRET_CODE=mySecret1 node firebase/seed/seed-access-config.mjs
 ```
 
 Useful when a deployment pipeline must set the code before the app is publicly

@@ -48,8 +48,11 @@ With the dev server running:
 npm run seed
 ```
 
-This registers `admin@example.com` / `ChangeMe123!` and a peer account through
-the public API and prints the admin uid for `ADMIN_UID`.
+This registers the administrator account (`ADMIN_EMAIL` with the password from
+`ADMIN_PASSWORD` — both read from `.env.local` / the environment) and a peer
+account through the public API, and prints the admin uid for `ADMIN_UID`. The
+secret code typed to unlock the gate comes from `SEED_SECRET_CODE`. The script
+refuses to run when `ADMIN_EMAIL` or `ADMIN_PASSWORD` is unset.
 
 ---
 
@@ -76,6 +79,7 @@ APP_SECRET=change-me-to-a-32-byte-random-hex
 DEV_SESSION_SECRET=change-me-too-32-byte-random-hex
 SEED_SECRET_CODE=opensesame
 ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=ChangeMe123!
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_APP_NAME=Keypad
 ```
