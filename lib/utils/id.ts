@@ -7,7 +7,6 @@ function randomBytes(length: number): Uint8Array {
     return globalThis.crypto.getRandomValues(new Uint8Array(length));
   }
   // Node without a global crypto (older runtimes / workers).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodeCrypto = require('node:crypto') as { randomBytes: typeof nodeRandomBytes };
   return new Uint8Array(nodeCrypto.randomBytes(length));
 }

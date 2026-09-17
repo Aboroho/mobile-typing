@@ -44,6 +44,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async register({ name, email, password, confirmPassword }) {
     try {
       const client = await getAuthClient();
+      setAuthTokenProvider(() => client.getToken());
       if (client.kind === 'firebase') await client.signUp({ email, password, name });
       const result = await api.auth.register({ name, email, password, confirmPassword });
       set({ user: result.user, error: null });
@@ -58,6 +59,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async login({ email, password }) {
     try {
       const client = await getAuthClient();
+      setAuthTokenProvider(() => client.getToken());
       if (client.kind === 'firebase') await client.signIn({ email, password });
       const result = await api.auth.login({ email, password });
       set({ user: result.user, error: null });
@@ -72,6 +74,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async reauthenticate(password) {
     try {
       const client = await getAuthClient();
+      setAuthTokenProvider(() => client.getToken());
       if (client.kind === 'firebase') await client.reauthenticate(password);
       const result = await api.auth.reauthenticate({ password });
       set({ user: result.user, error: null });
