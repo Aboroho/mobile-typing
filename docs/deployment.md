@@ -128,8 +128,8 @@ Create the database in production mode. Deploy the composite indexes (the root
 firebase deploy --only firestore:indexes
 ```
 
-Without them, the conversation list, message pagination, call lookup and admin
-filters fail with a "missing index" error that names the index to create.
+Without them, the conversation list, message pagination and admin filters
+fail with a "missing index" error that names the index to create.
 `npm run doctor` runs the conversation-list query against an empty subcollection
 so a missing index is reported before a user hits it.
 
