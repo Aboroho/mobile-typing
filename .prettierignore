@@ -1,0 +1,9 @@
+node_modules
+.next
+coverage
+playwright-report
+test-results
+packages/*/src/data/wordlists
+firebase/seed
+pnpm-lock.yaml
+package-lock.json

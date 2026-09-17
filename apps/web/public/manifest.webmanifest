@@ -1,0 +1,10 @@
+{
+  "name": "Keypad",
+  "short_name": "Keypad",
+  "description": "Typing practice for English and Bengali.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": []
+}

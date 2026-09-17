@@ -1,0 +1,25 @@
+rules_version = '2';
+
+/**
+ * Media objects are private.
+ *
+ * The application never exposes a public download URL: it either streams bytes
+ * through an authorised API route or mints a short lived (60s) signed URL after
+ * re-checking ownership, deletion state and the one-time-view claim.
+ *
+ * Direct client SDK access is therefore denied outright. If you later want
+ * direct browser uploads, replace the `write` rule with a request-scoped check
+ * against `request.resource.size` and `request.resource.contentType`, and keep
+ * the admin-only delete so soft deletion cannot be bypassed.
+ */
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /media/{userId}/{scope}/{file} {
+      allow read: if false;
+      allow write: if false;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
