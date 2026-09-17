@@ -48,11 +48,5 @@ export function parsePublicEnv(env: NodeJS.ProcessEnv = process.env): PublicEnv 
 }
 
 export function hasFirebaseClientConfig(publicEnv: PublicEnv): boolean {
-  return Boolean(
-    publicEnv.NEXT_PUBLIC_FIREBASE_API_KEY &&
-      publicEnv.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN &&
-      publicEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
-      publicEnv.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID &&
-      publicEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
-  );
+  return Boolean(publicEnv.NEXT_PUBLIC_FIREBASE_API_KEY);
 }
