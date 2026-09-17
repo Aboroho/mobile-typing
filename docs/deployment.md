@@ -162,7 +162,7 @@ rather than silent.
 ## 9. Deployment to Vercel
 
 1. Import the repository. The framework preset is **Next.js**; the root directory
-   is the repository root (npm workspaces).
+   is the repository root (single Next.js package).
 2. Build command `npm run build`, output `.next` (the config sets
    `output: 'standalone'`).
 3. Add every environment variable from `.env.example` except `NODE_ENV`.

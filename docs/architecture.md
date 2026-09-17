@@ -11,7 +11,7 @@ in [`deployment.md`](./deployment.md); the threat model lives in
 
 ```bash
 node --version        # >= 20.11 required
-npm install           # installs every workspace (root, apps/*, packages/*)
+npm install           # single Next.js app at the repository root
 cp .env.example .env.local
 npm run dev           # http://localhost:3000
 ```
@@ -25,10 +25,10 @@ and `STORAGE_PROVIDER=memory`.
 
 | Command | What it runs |
 | --- | --- |
-| `npm run dev` | Next.js dev server for `apps/web` on port 3000 |
+| `npm run dev` | Next.js dev server on port 3000 |
 | `npm run build` | Production build (`next build`) |
 | `npm run start` | Serve the production build |
-| `npm run typecheck` | `tsc --noEmit` in every workspace |
+| `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (flat config, `--max-warnings=0`) |
 | `npm run test` | Vitest unit + API integration tests |
 | `npm run e2e` | Playwright (requires `npm run e2e:install` once) |
@@ -40,29 +40,36 @@ and is lost on restart. That is deliberate: nothing about the development
 fallback can be confused with production data, and `assertFallbackAllowed()`
 throws if a fallback provider is ever reached in a production build.
 
-## 3. Workspace layout
+## 3. Application layout
+
+Single Next.js package at the repository root (no monorepo / workspaces):
 
 ```
-apps/web              Next.js App Router application (UI + API routes)
-apps/mobile/README.md Placeholder and migration notes for a future RN client
-packages/types        Domain types, enums and product limits
-packages/validation   Zod schemas for every request body and query string
-packages/domain       Pure business rules (no React, no Firebase, no HTTP)
-packages/api-client   Typed HTTP client used by the browser
-packages/config       Environment parsing for public and server contexts
-packages/utils        Hashing, ids, time, base64 and text helpers
+app/                  Next.js App Router (UI + API routes)
+components/           React UI
+hooks/ stores/        Client hooks and Zustand stores
+lib/types             Domain types, enums and product limits
+lib/validation        Zod schemas for every request body and query string
+lib/domain            Pure business rules (no React, no Firebase, no HTTP)
+lib/api-client        Typed HTTP client used by the browser
+lib/config            Environment parsing for public and server contexts
+lib/utils             Hashing, ids, time, base64 and text helpers
+lib/*                 Server services, data providers, auth, realtime, …
+public/               Static assets including typing word lists
 firebase/             Firestore/Storage rules, composite indexes, notes
 scripts/              Dev seeding and admin-claim helpers
+tests/ e2e/           Vitest + Playwright
 docs/                 This directory
+howto.md              Setup, .env, missing-data troubleshooting
 ```
 
-Dependency direction is one-way: `apps/web` → `packages/*` → `packages/types`.
-`packages/domain` is where every rule that matters is implemented once — the
+Dependency direction is one-way: app/components → `lib/*` → `lib/types`.
+`lib/domain` is where every rule that matters is implemented once — the
 rolling keystroke buffer, typing scoring, the message edit window, the
 soft-delete patch, the view-once state machine, media validation and call
 transitions — so the API layer and the UI cannot drift apart.
 
-Inside `apps/web`:
+Inside the app:
 
 ```
 app/                  Routes and API handlers (51 route files under app/api/v1)

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "ES2022"
+    ],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "incremental": true,
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@mt/types": [
+        "./lib/types/index.ts"
+      ],
+      "@mt/types/*": [
+        "./lib/types/*"
+      ],
+      "@mt/validation": [
+        "./lib/validation/index.ts"
+      ],
+      "@mt/validation/*": [
+        "./lib/validation/*"
+      ],
+      "@mt/domain": [
+        "./lib/domain/index.ts"
+      ],
+      "@mt/domain/*": [
+        "./lib/domain/*"
+      ],
+      "@mt/api-client": [
+        "./lib/api-client/index.ts"
+      ],
+      "@mt/api-client/*": [
+        "./lib/api-client/*"
+      ],
+      "@mt/utils": [
+        "./lib/utils/index.ts"
+      ],
+      "@mt/utils/*": [
+        "./lib/utils/*"
+      ],
+      "@mt/config": [
+        "./lib/config/index.ts"
+      ],
+      "@mt/config/*": [
+        "./lib/config/*"
+      ]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "apps",
+    "packages"
+  ]
+}

@@ -2,7 +2,7 @@
 
 Cloud Firestore, accessed exclusively through the Firebase Admin SDK. The
 application code never talks to Firestore directly: it uses the repository
-interfaces in `apps/web/lib/data/types.ts`, which have two implementations —
+interfaces in `lib/data/types.ts`, which have two implementations —
 `memory` (development and tests) and `firestore` (production).
 
 ## Timestamps
