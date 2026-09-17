@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --surface: 0 0% 100%;
+    --surface-raised: 210 20% 98%;
+    --surface-sunken: 210 16% 94%;
+    --line: 214 16% 88%;
+    --ink: 215 25% 12%;
+    --ink-muted: 215 14% 42%;
+    --ink-faint: 215 12% 62%;
+    --brand: 174 62% 32%;
+    --brand-soft: 174 55% 92%;
+    --brand-strong: 174 70% 24%;
+    --accent: 174 62% 32%;
+    --danger: 4 74% 48%;
+    --warning: 36 92% 46%;
+    --success: 152 58% 38%;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Bengali',
+      sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .dark {
+    --surface: 215 22% 9%;
+    --surface-raised: 215 20% 13%;
+    --surface-sunken: 215 24% 6%;
+    --line: 215 16% 22%;
+    --ink: 210 20% 96%;
+    --ink-muted: 214 12% 68%;
+    --ink-faint: 214 10% 52%;
+    --brand: 174 58% 40%;
+    --brand-soft: 174 30% 18%;
+    --brand-strong: 174 62% 48%;
+    --accent: 174 58% 40%;
+    --danger: 4 78% 62%;
+    --warning: 36 92% 58%;
+    --success: 152 52% 48%;
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  html,
+  body {
+    @apply h-full bg-surface text-ink;
+    /* Mobile browsers: avoid the rubber-band revealing a locked chat behind. */
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* Password/email inputs must never feed the secret-code keystroke buffer. */
+  input,
+  textarea {
+    @apply outline-none;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand;
+  }
+}
+
+@layer components {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .no-select {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .chat-backdrop {
+    background-image: radial-gradient(circle at 1px 1px, hsl(var(--line)) 1px, transparent 0);
+    background-size: 22px 22px;
+  }
+}
+
+/* Print/screen-capture deterrence: content vanishes when the tab is hidden. */
+.privacy-locked .privacy-blur {
+  filter: blur(18px);
+  pointer-events: none;
+}
