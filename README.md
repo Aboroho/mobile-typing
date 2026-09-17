@@ -57,6 +57,27 @@ with `dev` it registers email + password directly, with `firebase` it signs up
 through the Identity Toolkit REST API (`NEXT_PUBLIC_FIREBASE_API_KEY`) and
 registers with the resulting Firebase ID token, exactly like the browser does.
 
+### Keeping everything in Firebase
+
+Set `DATA_PROVIDER=firestore`, `AUTH_PROVIDER=firebase` and `STORAGE_PROVIDER=firebase`
+plus the web and Admin credentials, then verify the result before relying on it:
+
+```bash
+npm run doctor
+```
+
+It reports which file each value came from, initialises the Admin SDK, writes and
+deletes a probe document, checks that the conversation-list index exists, signs a
+throwaway user up through the same Identity Toolkit call the browser makes, and
+uploads and deletes a probe object — so a missing Firestore database, a disabled
+Email/Password provider or an absent bucket is named instead of surfacing later as
+a 401 or a 500. `.env.local` takes precedence over `.env`, and a key set to an
+empty value still counts as set, so a copied template silently hides real
+credentials in the other file; that shadowing is the first thing the doctor
+reports. Console steps it cannot do for you are in
+[`firebase/README.md`](./firebase/README.md) and
+[`docs/deployment.md`](./docs/deployment.md).
+
 ## Commands
 
 | Command | Description |
@@ -75,6 +96,7 @@ registers with the resulting Firebase ID token, exactly like the browser does.
 | `npm run e2e` | Playwright end-to-end tests (starts the dev server) |
 | `npm run verify` | typecheck → lint → test → build |
 | `npm run seed` | Register demo users through the public API (works with both auth providers) |
+| `npm run doctor` | Check that this machine can really use the configured Firebase project (env precedence, credentials, Firestore, Auth, Storage) |
 | `npm run firebase:deploy:rules` | Deploy Firestore/Storage rules and indexes |
 
 ### Deploying

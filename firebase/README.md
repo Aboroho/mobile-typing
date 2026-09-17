@@ -20,9 +20,19 @@ Enable, in the console:
 
 ## 2. Deploy rules and indexes
 
+The root [`firebase.json`](../firebase.json) points the CLI at the files in this
+directory. Select the project first — `firebase use <project-id>` writes a
+`.firebaserc`, or pass `--project <project-id>` per command:
+
 ```bash
+firebase use <project-id>
 firebase deploy --only firestore:rules,storage.rules,firestore:indexes
 ```
+
+The composite indexes in `firestore.indexes.json` are **required**, not optional:
+without them the conversation list, message pagination, call lookup and admin
+filters fail at runtime with a "missing index" error. The rules are defence in
+depth — the server uses the Admin SDK, which bypasses them.
 
 - `firestore.rules` — participants-only reads, no client writes, admin via the
   `role == 'admin'` custom claim.
@@ -65,6 +75,21 @@ STORAGE_PROVIDER=firebase
 Restart the dev server. All three fallback providers refuse to initialise when
 `NODE_ENV=production` and `APP_ENV=production`, so a missing credential fails the
 deployment loudly instead of silently storing data in memory.
+
+## 6. Verify the result
+
+```bash
+npm run doctor
+```
+
+Checks, in order: that every Firebase variable is actually set in the file that
+wins (`.env.local` overrides `.env`, and an empty value still overrides), that
+the private key is a real PEM block, that the Admin SDK initialises, that this
+machine can reach Google APIs, that Firestore accepts a write, that the
+conversation-list composite index exists, that Email/Password sign-up works and
+its ID token verifies, and that the Storage bucket exists and accepts an upload.
+Each probe is deleted again; the only lasting effect is a created-then-deleted
+Auth user (skip it with `npm run doctor -- --no-signup`).
 
 ## Timestamps
 

@@ -4,12 +4,33 @@ import { getData, type UserRecord } from '../data';
 import { getAuthProvider, issueDevSessionToken } from '../auth';
 import { hashPassword } from '../auth/password';
 import { isAdminUser, verifyRequestToken } from '../auth/session';
+import { firebaseClientConfigured } from '../diagnostics';
 import { logger } from '../logger';
 
 export interface AuthOutcome {
   user: UserRecord;
   token: string | null;
   cookieSession: boolean;
+}
+
+/**
+ * With `AUTH_PROVIDER=firebase` the API only accepts ID tokens that the browser
+ * obtained from the Firebase SDK. When the public Firebase config is unset the
+ * client silently uses the dev adapter instead (see lib/client/auth-client.ts),
+ * so no token ever arrives and every sign-up / sign-in is rejected. The 401 the
+ * caller receives is correct but meaningless to them, and it is not safe to
+ * explain a deployment's configuration to an anonymous client — so the real
+ * cause is written to the server log, where the operator will find it.
+ */
+function logMissingFirebaseClientConfig(route: string): void {
+  if (firebaseClientConfigured()) return;
+  logger.error('auth.firebase_client_config_missing', {
+    route,
+    detail:
+      'AUTH_PROVIDER=firebase but NEXT_PUBLIC_FIREBASE_* is unset, so the browser cannot obtain a Firebase ID ' +
+      'token and this request can never authenticate. Fill in the Firebase web config, or use AUTH_PROVIDER=dev ' +
+      'for local development.',
+  });
 }
 
 /**
@@ -33,7 +54,10 @@ export async function register(input: {
 
   if (provider.name === 'firebase') {
     const verified = await verifyRequestToken(input.request);
-    if (!verified) throw AppError.unauthenticated('complete the Firebase sign-up first');
+    if (!verified) {
+      logMissingFirebaseClientConfig('register');
+      throw AppError.unauthenticated('complete the Firebase sign-up first');
+    }
     const existing = await data.users.getById(verified.uid);
     if (existing) throw AppError.conflict('that account already exists');
     const record = await createProfile({
@@ -68,7 +92,10 @@ export async function login(input: {
 
   if (provider.name === 'firebase') {
     const verified = await verifyRequestToken(input.request);
-    if (!verified) throw AppError.unauthenticated('invalid credentials');
+    if (!verified) {
+      logMissingFirebaseClientConfig('login');
+      throw AppError.unauthenticated('invalid credentials');
+    }
     let record = await data.users.getById(verified.uid);
     if (!record) {
       record = await createProfile({ id: verified.uid, email: verified.email, name: verified.email.split('@')[0] ?? 'User' });
@@ -117,7 +144,10 @@ export async function reauthenticate(input: {
 
   if (provider.name === 'firebase') {
     const verified = await verifyRequestToken(input.request);
-    if (!verified) throw AppError.unauthenticated('sign in again to continue');
+    if (!verified) {
+      logMissingFirebaseClientConfig('reauthenticate');
+      throw AppError.unauthenticated('sign in again to continue');
+    }
     const ageMs = Date.now() - verified.authTime * 1000;
     if (ageMs > REAUTH_MAX_AGE_MS) {
       throw AppError.precondition('re-enter your password to continue');
