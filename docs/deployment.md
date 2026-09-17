@@ -18,6 +18,7 @@ use that prefix.
 | `APP_ENV` | `development` | `production` here (together with `NODE_ENV=production`) disables every fallback provider |
 | `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Canonical public URL |
 | `NEXT_PUBLIC_APP_NAME` | `Keypad` | Shown as the app name |
+| `NEXT_PUBLIC_ENABLE_TYPING_GAME` | `true` | `false` skips the typing-game disguise and secret-code gate entirely; visitors go straight to sign-in and chat. Read by both the browser and the API, so the two sides never disagree about whether an access session is required |
 
 ### Providers
 

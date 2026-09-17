@@ -95,6 +95,8 @@ user, and the access session is bound to the user it was issued for.
 time, per-character highlighting, a result screen with a grade and replay, and a
 layout that works on mobile and desktop (including virtual keyboards). If the
 word list fails to load, a built-in fallback keeps **Start test** working.
+Set `NEXT_PUBLIC_ENABLE_TYPING_GAME=false` to disable the game and the
+secret-code gate entirely — visitors then land straight on sign-in and chat.
 
 **Locking** — triple tap (touch + pointer, with time and distance thresholds) and
 tab hide/minimise both return to the game and clear unlock state; an active call
