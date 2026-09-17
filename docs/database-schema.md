@@ -134,12 +134,26 @@ Read and written only by the Admin SDK.
 ## Indexes
 
 `firebase/firestore.indexes.json` declares the composite indexes the queries
-need: messages by (`deleted`, `createdAt` desc), by (`senderId`,
-`clientMessageId`), by `messageId`, plus collection-group indexes on
-`createdAt` and (`senderId`, `createdAt`); calls by (`conversationId`, `status`)
-and (`recipientId`, `status`); users by (`status`, `searchKey`); conversation
-items by (`hidden`, `lastActivityAt` desc); media by (`deleted`, `kind`,
-`createdAt` desc); audit logs by (`action`, `createdAt` desc).
+need: messages by (`deleted`, `createdAt` desc) and a collection-group index
+by (`senderId`, `createdAt` desc); users by (`status`, `searchKey`);
+conversation items by (`hidden`, `lastActivityAt` desc); media by
+(`deleted`, `kind`, `createdAt` desc); audit logs by (`action`,
+`createdAt` desc).
+
+It also declares `fieldOverrides` for the `messages` collection group —
+single-field indexes on `messageId`, `deleted` and `createdAt` with
+`COLLECTION_GROUP` scope, because collection-group single-field indexes are
+not created automatically (the `COLLECTION`-scope default is redeclared in
+each override, since an override replaces the field's automatic settings).
+They serve the collection-group queries in `FirestoreMessages`: lookup by
+`messageId`, the `deleted` and `createdAt` counts, and the recent-messages
+list ordered by `createdAt`.
+
+Do not declare single-field entries in `indexes`: Firestore creates
+collection-scope single-field indexes automatically and rejects the rest,
+and several-equality queries (message deduplication by `senderId` +
+`clientMessageId`, call lookups by `conversationId`/`recipientId` + `status`)
+are served by merging those automatic indexes, so no composite is needed.
 
 Deploy them with `firebase deploy --only firestore:indexes`.
 
