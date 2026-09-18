@@ -29,6 +29,8 @@ export const serverEnvSchema = z.object({
   DATA_PROVIDER: z.enum(['memory', 'firestore']).default('memory'),
   STORAGE_PROVIDER: z.enum(['memory', 'firebase']).default('memory'),
 
+  /** Explicit opt-in to the local Auth emulator; refused in production. */
+  FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
   FIREBASE_PROJECT_ID: optionalNonEmpty,
   FIREBASE_CLIENT_EMAIL: optionalNonEmpty,
   /** Newlines in the private key arrive escaped from most hosting dashboards. */

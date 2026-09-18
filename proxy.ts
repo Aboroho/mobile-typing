@@ -21,7 +21,7 @@ import { NextResponse, type NextRequest } from 'next/server';
  * scripts automatically, so no other code has to know about it.
  * See: https://nextjs.org/docs/app/guides/content-security-policy
  */
-function buildCsp(nonce: string): string {
+function buildCsp(nonce: string, frameAncestors: string): string {
   const isDev = process.env.NODE_ENV === 'development';
   return [
     "default-src 'self'",
@@ -33,7 +33,7 @@ function buildCsp(nonce: string): string {
     "media-src 'self' blob: mediastream:",
     "font-src 'self' data:",
     "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com wss://*.googleapis.com",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${frameAncestors}`,
     "base-uri 'self'",
     "form-action 'self'",
     "object-src 'none'",
@@ -43,33 +43,44 @@ function buildCsp(nonce: string): string {
 export function proxy(request: NextRequest) {
   const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+  const securityHeadersEnabled = process.env.ENABLE_SECURITY_HEADERS !== 'false';
+  const cspMode = process.env.CSP_MODE ?? 'enforce';
+  // Opt-in for an embedded development preview. Production always refuses
+  // framing, even if a developer accidentally leaves this variable set.
+  const frameAncestors =
+    (process.env.NODE_ENV === 'development' &&
+      process.env.APP_ENV !== 'production' &&
+      process.env.DEV_FRAME_ANCESTORS?.trim()) ||
+    "'none'";
+  const csp = securityHeadersEnabled && cspMode !== 'off' ? buildCsp(nonce, frameAncestors) : null;
+  const headerName =
+    cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
 
-  // The nonce must reach Next's own renderer via the *request* headers (so it
-  // can stamp framework scripts with it), not just the response.
+  // Next extracts the script nonce from the CSP request header, not x-nonce.
+  // Forward the same policy we send to the browser instead of relying on the
+  // runtime copying proxy response headers back onto the render request.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', requestId);
   requestHeaders.set('x-nonce', nonce);
+  requestHeaders.delete('Content-Security-Policy');
+  requestHeaders.delete('Content-Security-Policy-Report-Only');
+  if (csp) requestHeaders.set(headerName, csp);
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
-
   response.headers.set('x-request-id', requestId);
 
   // ENABLE_SECURITY_HEADERS=false is an escape hatch for local debugging only.
-  const securityHeadersEnabled = process.env.ENABLE_SECURITY_HEADERS !== 'false';
   if (!securityHeadersEnabled) return response;
 
   response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('X-Frame-Options', 'DENY');
+  if (frameAncestors === "'none'") response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('Referrer-Policy', 'no-referrer');
-  response.headers.set('Permissions-Policy', 'camera=(), geolocation=(), interest-cohort=(), microphone=(self)');
+  response.headers.set(
+    'Permissions-Policy',
+    'camera=(), geolocation=(), interest-cohort=(), microphone=(self)',
+  );
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-
-  const cspMode = process.env.CSP_MODE ?? 'enforce';
-  if (cspMode === 'off') return response;
-
-  const csp = buildCsp(nonce);
-  const headerName = cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
-  response.headers.set(headerName, csp);
+  if (csp) response.headers.set(headerName, csp);
 
   return response;
 }

@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  collectConfigIssues,
-  parsePublicEnv,
-  parseServerEnv,
-  type ConfigIssue,
-} from '@mt/config';
+import { collectConfigIssues, parsePublicEnv, parseServerEnv, type ConfigIssue } from '@mt/config';
 import { reportConfigIssues, resetReportedConfigIssues } from '@/lib/diagnostics';
 
 /** Shaped like a real PKCS#8 key: a PEM block with a long base64 body. */
@@ -78,7 +73,9 @@ describe('configuration diagnostics', () => {
 
   it('explains why sign-up fails when the browser has no Firebase configuration', () => {
     const issues = issuesFor(localServer);
-    const issue = issues.find((candidate) => candidate.reason === 'firebase_auth_without_client_config');
+    const issue = issues.find(
+      (candidate) => candidate.reason === 'firebase_auth_without_client_config',
+    );
     expect(issue?.level).toBe('error');
     // The message must name every missing variable, because this is the
     // misconfiguration behind a bare "complete the Firebase sign-up first".
@@ -100,7 +97,9 @@ describe('configuration diagnostics', () => {
     // Verifying a Firebase credential needs the Admin SDK, so this is not
     // conditional on DATA_PROVIDER or STORAGE_PROVIDER any more.
     const issues = issuesFor({ ...localServer, FIREBASE_PRIVATE_KEY: '' }, webConfig());
-    const issue = issues.find((candidate) => candidate.reason === 'firebase_admin_credentials_missing');
+    const issue = issues.find(
+      (candidate) => candidate.reason === 'firebase_admin_credentials_missing',
+    );
     expect(issue?.level).toBe('error');
     expect(issue?.message).toContain('Firebase Authentication');
     expect(issue?.message).toContain('FIREBASE_PROJECT_ID');
@@ -116,7 +115,9 @@ describe('configuration diagnostics', () => {
       STORAGE_PROVIDER: 'firebase',
       APP_SECRET: 'a1'.repeat(16),
     });
-    const issue = issues.find((candidate) => candidate.reason === 'firebase_admin_credentials_missing');
+    const issue = issues.find(
+      (candidate) => candidate.reason === 'firebase_admin_credentials_missing',
+    );
     expect(issue?.level).toBe('error');
     expect(issue?.message).toContain('DATA_PROVIDER=firestore');
     expect(issue?.message).toContain('STORAGE_PROVIDER=firebase');
@@ -155,7 +156,10 @@ describe('configuration diagnostics', () => {
   });
 
   it('flags a service-account client email that is not an email address', () => {
-    const issues = issuesFor({ ...firebaseServer, FIREBASE_CLIENT_EMAIL: 'keypad-prod' }, webConfig());
+    const issues = issuesFor(
+      { ...firebaseServer, FIREBASE_CLIENT_EMAIL: 'keypad-prod' },
+      webConfig(),
+    );
     expect(reasons(issues)).toContain('firebase_client_email_malformed');
   });
 
@@ -173,7 +177,9 @@ describe('configuration diagnostics', () => {
       { ...localServer, NODE_ENV: 'production', APP_ENV: 'production' },
       webConfig(),
     );
-    const fallbacks = issues.filter((candidate) => candidate.reason === 'fallback_provider_in_production');
+    const fallbacks = issues.filter(
+      (candidate) => candidate.reason === 'fallback_provider_in_production',
+    );
     // Data and storage only: authentication has no fallback to refuse.
     expect(fallbacks).toHaveLength(2);
     expect(fallbacks.every((issue) => issue.level === 'error')).toBe(true);
@@ -204,8 +210,12 @@ describe('configuration diagnostics', () => {
     // 16 characters satisfies the schema minimum but is well below what
     // `openssl rand -hex 32` produces, so it is only refused in production.
     const short = 'a'.repeat(16);
-    expect(reasons(issuesFor({ ...localServer, APP_SECRET: short }, webConfig()))).not.toContain('weak_secret');
-    expect(reasons(issuesFor({ ...firebaseServer, APP_SECRET: short }, webConfig()))).toContain('weak_secret');
+    expect(reasons(issuesFor({ ...localServer, APP_SECRET: short }, webConfig()))).not.toContain(
+      'weak_secret',
+    );
+    expect(reasons(issuesFor({ ...firebaseServer, APP_SECRET: short }, webConfig()))).toContain(
+      'weak_secret',
+    );
   });
 
   it('reproduces the reported sign-up failure from a copied .env.example', () => {
@@ -246,7 +256,9 @@ describe('reportConfigIssues', () => {
   });
 
   function loggedLines(spy: ReturnType<typeof vi.spyOn>): string[] {
-    return spy.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('config.issue'));
+    return spy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes('config.issue'));
   }
 
   it('logs each distinct problem once per process', () => {
@@ -277,5 +289,48 @@ describe('reportConfigIssues', () => {
     expect(lines.join(' ')).toContain('APP_SECRET');
     // The value itself is never logged.
     expect(lines.join(' ')).not.toContain('change-me-to-a-32-byte-random-hex');
+  });
+});
+
+describe('explicit emulator diagnostics', () => {
+  const emulatorServer = {
+    NODE_ENV: 'development',
+    APP_ENV: 'test',
+    DATA_PROVIDER: 'memory',
+    STORAGE_PROVIDER: 'memory',
+    APP_SECRET: 'a1'.repeat(32),
+    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9199',
+    FIREBASE_PROJECT_ID: 'demo-keypad',
+  };
+
+  it('needs no private key for local Auth with memory repositories', () => {
+    expect(issuesFor(emulatorServer, webConfig('demo-keypad'))).toEqual([]);
+  });
+
+  it('still requires credentials for live Firestore even if Auth is emulated', () => {
+    expect(
+      reasons(
+        issuesFor({ ...emulatorServer, DATA_PROVIDER: 'firestore' }, webConfig('demo-keypad')),
+      ),
+    ).toContain('firebase_admin_credentials_missing');
+  });
+
+  it('explains a missing demo project id', () => {
+    expect(
+      reasons(issuesFor({ ...emulatorServer, FIREBASE_PROJECT_ID: '' }, webConfig('demo-keypad'))),
+    ).toContain('firebase_auth_emulator_without_project');
+  });
+
+  it('reports unsigned Auth emulation as an error in production', () => {
+    const issues = issuesFor(
+      { ...emulatorServer, NODE_ENV: 'production' },
+      webConfig('demo-keypad'),
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        reason: 'firebase_auth_emulator_in_production',
+      }),
+    );
   });
 });

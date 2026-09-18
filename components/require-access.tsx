@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { parsePublicEnv } from '@mt/config';
 import { useAccessStore } from '@/stores/access-store';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -14,7 +15,7 @@ import { useAuthStore } from '@/stores/auth-store';
  */
 export function RequireAccess({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const unlocked = useAccessStore((state) => state.unlocked);
+  const unlocked = useAccessStore((state) => state.unlocked) || !parsePublicEnv().NEXT_PUBLIC_ENABLE_TYPING_GAME;
   const user = useAuthStore((state) => state.user);
   const initializing = useAuthStore((state) => state.initializing);
 

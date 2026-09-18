@@ -100,9 +100,25 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
 
   // 3. Verifying a Firebase credential needs the Admin SDK, so the service
   //    account is required by every deployment; data and storage add to that.
-  if (!hasFirebaseAdminCredentials(server)) {
+  const authEmulator = Boolean(server.FIREBASE_AUTH_EMULATOR_HOST);
+  if (authEmulator && (server.NODE_ENV === 'production' || server.APP_ENV === 'production')) {
+    issues.push({
+      level: 'error',
+      reason: 'firebase_auth_emulator_in_production',
+      message: 'FIREBASE_AUTH_EMULATOR_HOST must not be set in production: emulator tokens are unsigned.',
+    });
+  }
+  if (authEmulator && !server.FIREBASE_PROJECT_ID) {
+    issues.push({
+      level: 'error',
+      reason: 'firebase_auth_emulator_without_project',
+      message: 'Set FIREBASE_PROJECT_ID to the same demo project used by the Auth emulator and NEXT_PUBLIC_FIREBASE_PROJECT_ID.',
+    });
+  }
+  const needsCredentials = !authEmulator || server.DATA_PROVIDER === 'firestore' || server.STORAGE_PROVIDER === 'firebase';
+  if (needsCredentials && !hasFirebaseAdminCredentials(server)) {
     const selected = [
-      'Firebase Authentication',
+      !authEmulator ? 'Firebase Authentication' : null,
       server.DATA_PROVIDER === 'firestore' ? 'DATA_PROVIDER=firestore' : null,
       server.STORAGE_PROVIDER === 'firebase' ? 'STORAGE_PROVIDER=firebase' : null,
     ]

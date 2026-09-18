@@ -22,6 +22,8 @@ export const publicEnvSchema = z.object({
   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: optionalNonEmpty,
   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: optionalNonEmpty,
   NEXT_PUBLIC_FIREBASE_APP_ID: optionalNonEmpty,
+  /** Set by next.config.ts from the server's development-only emulator setting. */
+  NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED: booleanish.default(false),
   NEXT_PUBLIC_APP_URL: z.string().min(1).default('http://localhost:3000'),
   NEXT_PUBLIC_APP_NAME: z.string().min(1).default('Keypad'),
   NEXT_PUBLIC_STUN_URLS: z.string().default(''),
@@ -38,7 +40,31 @@ export const publicEnvSchema = z.object({
 
 export type PublicEnv = z.infer<typeof publicEnvSchema>;
 
-export function parsePublicEnv(env: NodeJS.ProcessEnv = process.env): PublicEnv {
+/**
+ * Next.js only inlines literal `process.env.NEXT_PUBLIC_*` property reads.
+ * Passing `process.env` itself (or indexing it dynamically) works on the server
+ * but produces an empty environment in the browser, even with a complete .env.
+ * Keep this explicit allowlist in sync with the schema; never spread server env.
+ */
+function browserEnv(): Record<string, string | undefined> {
+  return {
+    NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED:
+      process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
+    NEXT_PUBLIC_STUN_URLS: process.env.NEXT_PUBLIC_STUN_URLS,
+    NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
+    NEXT_PUBLIC_ENABLE_TYPING_GAME: process.env.NEXT_PUBLIC_ENABLE_TYPING_GAME,
+  };
+}
+
+export function parsePublicEnv(env: Record<string, string | undefined> = browserEnv()): PublicEnv {
   const parsed = publicEnvSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');

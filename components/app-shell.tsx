@@ -52,12 +52,8 @@ export function AppShell() {
   // when there is a game/lock screen to return to.
   useTripleTap(handleTripleTap, GAME_ENABLED && unlocked);
 
-  // The challenge is fetched on first paint so the detector is armed immediately.
-  useEffect(() => {
-    if (GAME_ENABLED && !challenge && !unlocked) void startChallenge();
-  }, [challenge, unlocked, startChallenge]);
-
-  // Re-arm after a lock so the next attempt works without a reload.
+  // Arm on first paint and after each lock. startChallenge coalesces StrictMode's
+  // duplicate effect, so it cannot reset the keystroke buffer mid-sequence.
   useEffect(() => {
     if (GAME_ENABLED && !unlocked && !challenge) void startChallenge();
   }, [unlocked, challenge, startChallenge]);
@@ -75,11 +71,11 @@ export function AppShell() {
   }
 
   if (!user) {
-    return <AuthPanel initialMode="login" />;
+    return <AuthPanel key="login" initialMode="login" />;
   }
 
   if (GAME_ENABLED && boundUserId !== user.id) {
-    return <AuthPanel initialMode="reauth" />;
+    return <AuthPanel key="reauth" initialMode="reauth" />;
   }
 
   if (conversationId) {

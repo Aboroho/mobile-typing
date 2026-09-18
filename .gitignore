@@ -30,4 +30,5 @@ playwright/.cache/
 *.pem
 npm-debug.log*
 yarn-error.log*
+firebase-debug*.log
 .vercel

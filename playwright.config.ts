@@ -6,11 +6,9 @@ import { defineConfig, devices } from '@playwright/test';
  *   npm run e2e:install   # once: downloads Chromium
  *   npm run e2e           # starts the dev server and runs the specs
  *
- * They run against the development data and storage providers, so nothing is
- * written to a real database. Authentication is Firebase Authentication and has
- * no offline mode: the specs that sign in need a Firebase project (set the
- * `NEXT_PUBLIC_FIREBASE_*` values in `.env.local`) or the Firebase Auth emulator
- * (`FIREBASE_AUTH_EMULATOR_HOST`, which the Admin SDK honours by itself).
+ * These specs cover the public game and the access gate. Full signup/login
+ * coverage is in `npm run e2e:auth`, which starts an isolated Firebase Auth
+ * emulator and uses both real SDKs, never a live Firebase account.
  * A mobile viewport is used because the product is mobile-first; a desktop
  * project is included for the responsive check.
  */
@@ -25,6 +23,8 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    // Optional system Chromium (useful on CI machines without Playwright's download).
+    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH },
   },
   projects: [
     {

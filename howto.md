@@ -39,12 +39,14 @@ Default local providers (safe for development only):
 These defaults are **refused in a production build**. You never need Firebase
 just to try the typing game or the access flow locally.
 
-**Authentication is the exception: it always needs a Firebase project.** There is
-no development authentication provider and no offline fallback — the browser
+**Authentication is the exception: it always uses Firebase.** There is
+no development password provider or silent fallback — the browser
 verifies passwords with the Firebase client SDK and the API verifies the
 resulting ID tokens with the Admin SDK. So to sign up, sign in or chat locally,
 add the Firebase blocks from section 3 and enable Email/Password in the console
-(`npm run doctor` checks all of it).
+(`npm run doctor` checks all of it). For a local-only alternative,
+`npm run e2e:auth` explicitly starts Firebase's Auth emulator with a demo project;
+see [docs/auth-testing.md](./docs/auth-testing.md).
 
 ### Demo accounts
 
@@ -141,7 +143,7 @@ See [`.env.example`](./.env.example) for every key with comments. Summary:
 | Access | `SEED_SECRET_CODE`, `SECRET_CODE_MAX_LENGTH` | Local bootstrap |
 | Admin | `ADMIN_UID` or `ADMIN_EMAIL` | Admin UI / claims |
 | Firebase client | `NEXT_PUBLIC_FIREBASE_*` | **Always** — the browser signs users up and in |
-| Firebase Admin | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | **Always** — the server verifies ID tokens (and needs them again for Firestore/Storage) |
+| Firebase Admin | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Live Firebase — the server verifies ID tokens (and needs credentials for Firestore/Storage). Local Auth emulator tests need only the demo project id. |
 | WebRTC | `STUN_SERVER_URL`, `TURN_SERVER_*` | Audio calls off-LAN |
 | Limits / security | `RATE_LIMIT_*`, `CSP_MODE`, `LOG_LEVEL` | Optional tuning |
 
@@ -160,7 +162,8 @@ The app is designed to **degrade safely** instead of crashing the public UI.
 | `DATA_PROVIDER=firestore` but no Admin credentials | Server routes that touch the database throw a clear error. Switch back to `memory` or fill `FIREBASE_*`. |
 | No `NEXT_PUBLIC_FIREBASE_*` | Nobody can sign up or sign in: the sign-in form itself says `Firebase client configuration is incomplete — set NEXT_PUBLIC_FIREBASE_API_KEY, …` and the boot log names the variables (`config.issue` / `firebase_auth_without_client_config`). There is no fallback and no silent failure. |
 | No `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | The server cannot verify ID tokens, so every auth request is 401 and the boot log records `firebase_admin_credentials_missing`. Required even when data and storage are in memory. |
-| Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | Same cause as the row above: the server expects a Firebase ID token that the browser could not produce. Check the `npm run dev` terminal for `config.issue` (`firebase_auth_without_client_config`) and `auth.firebase_client_config_missing`, which name the variables to set. |
+| Sign-up / sign-in returns `UNAUTHENTICATED` — `complete the Firebase sign-up first` | The API received no valid Firebase credential. Check browser config, matching client/Admin project ids, service-account credentials and network access. Run `npm run doctor`; the API intentionally does not expose credential-verification details. |
+| The form says Firebase is unconfigured despite complete env values | Restart/rebuild after changing `NEXT_PUBLIC_*`. These must be read with literal `process.env.NEXT_PUBLIC_*` properties, as in `lib/config/public-env.ts`; passing `process.env` into the schema does not inline values into a browser bundle. |
 | `DATA_PROVIDER=firestore` / `STORAGE_PROVIDER=firebase` without Admin credentials | Every request touching data or media fails with a 500; boot logs `config.issue` (`firebase_admin_credentials_missing`). Use the `memory` providers locally. |
 | `npm run seed` fails with `complete the Firebase sign-up first` | `/api/v1/auth/register` needs a Firebase ID token that only the Identity Toolkit can issue. Set `NEXT_PUBLIC_FIREBASE_API_KEY` (and the other web values) so the seed can obtain one; the script stops with that explanation rather than a bare 401. |
 | `npm run seed` fails with 429 `RATE_LIMITED` | Registration is limited to 5 calls / 10 min / IP (`auth:register`). Wait for the window, or restart the dev server to reset the in-memory counters. |
@@ -249,7 +252,8 @@ Step-by-step Firebase provisioning, TURN, and Vercel notes live in
 | `npm run dev` | Dev server on `0.0.0.0:3000` |
 | `npm run build` / `npm start` | Production build + serve |
 | `npm test` | Unit + API tests (Vitest, memory providers) |
-| `npm run e2e` | Playwright (mobile + desktop viewports) |
+| `npm run e2e` | Playwright game/access gate (mobile + desktop viewports) |
+| `npm run e2e:auth` | Isolated emulator-backed signup/login, with both real Firebase SDKs |
 | `npm run seed` | Demo users against a running server |
 | `npm run doctor` | Verify the Firebase project, credentials and env precedence from this machine |
 | `npm run typecheck` | `tsc --noEmit` |

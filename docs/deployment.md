@@ -39,7 +39,7 @@ Enable **Authentication → Sign-in method → Email/Password** in the console, 
 add every deployment domain under **Authentication → Settings → Authorised
 domains**.
 
-### Firebase Admin (server only) — required in every environment
+### Firebase Admin (server only) — required for live Firebase
 
 `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
 Generate at Project settings → **Service accounts** → *Generate new private key*.
@@ -47,10 +47,13 @@ When pasting into a dashboard field, escape newlines as `\n`. The API needs thes
 to verify ID tokens and mint session cookies, so they are required even when data
 and storage are in memory.
 
-`FIREBASE_AUTH_EMULATOR_HOST=http://127.0.0.1:9099` is optional and only for
-local work: it points the Admin SDK at the Auth emulator. Both halves must agree
-— the browser needs the matching config, so an emulator-backed client is a client
-decision, not a server fallback.
+For explicit local-only testing, `FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9199`
+(**no** `http://` prefix) points the Admin SDK at the Auth emulator. Next.js also
+configures the browser SDK and proxies its requests on the same origin, so a
+remote browser never tries to contact its own localhost. With memory data/storage
+and a matching demo project id, no private key is needed. This mode is refused
+when `NODE_ENV` or `APP_ENV` is `production`; it is never an automatic fallback.
+See [Auth testing](./auth-testing.md) for a reproducible smoke test.
 
 ### Secrets
 

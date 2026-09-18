@@ -36,7 +36,7 @@ test.describe('typing game', () => {
 
   test('offers Bengali as well as English', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: 'বাংলা' }).click();
+    await page.getByRole('radio', { name: 'বাংলা' }).click();
     await page.getByRole('button', { name: 'Start test' }).click();
     await expect(page.getByLabel('Type the word shown above')).toBeVisible();
   });

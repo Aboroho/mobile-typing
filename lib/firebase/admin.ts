@@ -17,22 +17,39 @@ let cachedDb: Firestore | null = null;
  */
 export function getAdminApp(): App {
   if (cachedApp) return cachedApp;
-  const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = env();
-  if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+  const {
+    FIREBASE_PROJECT_ID,
+    FIREBASE_CLIENT_EMAIL,
+    FIREBASE_PRIVATE_KEY,
+    FIREBASE_AUTH_EMULATOR_HOST,
+    NODE_ENV,
+    APP_ENV,
+  } = env();
+  if (FIREBASE_AUTH_EMULATOR_HOST && (NODE_ENV === 'production' || APP_ENV === 'production')) {
+    throw new Error('FIREBASE_AUTH_EMULATOR_HOST must not be set in production.');
+  }
+  if (!FIREBASE_PROJECT_ID || (!FIREBASE_AUTH_EMULATOR_HOST && (!FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY))) {
     throw new Error(
       'Firebase Admin credentials are missing. Set FIREBASE_PROJECT_ID, ' +
-        'FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY, or use the memory providers for local development.',
+        'FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY. For local Auth emulator tests, set ' +
+        'FIREBASE_AUTH_EMULATOR_HOST and FIREBASE_PROJECT_ID instead.',
     );
   }
   cachedApp =
     getApps().find((app) => app.name === 'mt') ??
     initializeApp(
       {
-        credential: cert({
-          projectId: FIREBASE_PROJECT_ID,
-          clientEmail: FIREBASE_CLIENT_EMAIL,
-          privateKey: FIREBASE_PRIVATE_KEY,
-        }),
+        // The Auth emulator needs only a project id, never a real private key.
+        // The Admin SDK honours FIREBASE_AUTH_EMULATOR_HOST itself.
+        ...(!FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY
+          ? {}
+          : {
+              credential: cert({
+                projectId: FIREBASE_PROJECT_ID,
+                clientEmail: FIREBASE_CLIENT_EMAIL,
+                privateKey: FIREBASE_PRIVATE_KEY,
+              }),
+            }),
         projectId: FIREBASE_PROJECT_ID,
       },
       'mt',

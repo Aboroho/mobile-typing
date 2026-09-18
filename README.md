@@ -46,13 +46,15 @@ Data and storage default to in-memory providers (`DATA_PROVIDER=memory`,
 `STORAGE_PROVIDER=memory`), which are refused outright in a production build and
 do not survive a restart.
 
-**Authentication always needs a Firebase project.** There is no development
-authentication provider and no offline fallback: the browser signs users up and
+**Authentication always uses Firebase.** There is no development password
+provider or silent fallback: the browser signs users up and
 in with the Firebase client SDK, and the API verifies the resulting ID tokens
 with the Admin SDK. Fill in the `NEXT_PUBLIC_FIREBASE_*` (web) and
 `FIREBASE_*` (service account) blocks of `.env.local`, and enable
 Authentication → Sign-in method → Email/Password in the console. `npm run doctor`
 checks the whole setup, including that the Email/Password provider is enabled.
+For isolated local tests without a live project, use the explicit Auth emulator
+setup in **[docs/auth-testing.md](./docs/auth-testing.md)**.
 
 To create demo accounts against a running dev server:
 
@@ -100,7 +102,8 @@ reports. Console steps it cannot do for you are in
 | `npm run test:watch` | Vitest watch mode |
 | `npm run test:coverage` | Vitest with V8 coverage |
 | `npm run e2e:install` | Download Chromium for Playwright (once) |
-| `npm run e2e` | Playwright end-to-end tests (starts the dev server) |
+| `npm run e2e` | Playwright game/access-gate tests (starts the dev server) |
+| `npm run e2e:auth` | Mobile + desktop signup, reload, logout, rejected password and login against an isolated Firebase Auth emulator; stop the dev server first |
 | `npm run verify` | typecheck → lint → test → build |
 | `npm run seed` | Register demo users through Firebase and the public API |
 | `npm run doctor` | Check that this machine can really use the configured Firebase project (env precedence, credentials, Firestore, Auth, Storage) |
@@ -216,6 +219,7 @@ annotated list and what happens when values are missing. The essentials:
 | `SEED_SECRET_CODE` | Bootstrap code until an administrator changes it |
 | `NEXT_PUBLIC_FIREBASE_*` | Firebase web config (public by design) |
 | `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | Admin SDK credentials |
+| `FIREBASE_AUTH_EMULATOR_HOST` | Explicit local Auth emulator, e.g. `127.0.0.1:9199`; no URL scheme, forbidden in production |
 | `STUN_SERVER_URL`, `TURN_SERVER_*` | WebRTC ICE servers |
 
 ## Firebase and administrator setup

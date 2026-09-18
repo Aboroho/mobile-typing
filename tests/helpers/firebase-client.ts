@@ -39,12 +39,14 @@ export class FakeFirebaseClientAuth {
   private currentUid: string | null = null;
   /** Emails a reset mail was "sent" to. */
   readonly resetEmails: string[] = [];
+  emulatorUrl: string | null = null;
 
   reset(): void {
     this.accounts.clear();
     this.listeners.clear();
     this.resetEmails.length = 0;
     this.currentUid = null;
+    this.emulatorUrl = null;
   }
 
   get currentUser(): FakeClientUser | null {
@@ -145,6 +147,7 @@ export const firebaseAppModule = {
 /** Shaped like `firebase/auth`: free functions taking the auth instance first. */
 export const firebaseAuthModule = {
   getAuth: () => fakeFirebaseClientAuth,
+  connectAuthEmulator: (_auth: unknown, url: string) => { fakeFirebaseClientAuth.emulatorUrl = url; },
   onAuthStateChanged: (
     _auth: unknown,
     callback: (user: FakeClientUser | null) => void,

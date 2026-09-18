@@ -17,9 +17,13 @@ interface AccessState {
   error: string | null;
   startChallenge: () => Promise<AccessChallenge | null>;
   unlockWithCode: (code: string) => Promise<boolean>;
+  /** Mirrors the binding confirmed by an auth response, never grants access on its own. */
+  bindAuthenticatedUser: (userId: string | null, accessGranted: boolean) => void;
   lock: (options?: { silent?: boolean }) => Promise<void>;
   refresh: () => Promise<void>;
 }
+
+let challengeRequest: Promise<AccessChallenge | null> | null = null;
 
 /**
  * Access (secret-code) state.
@@ -38,16 +42,31 @@ export const useAccessStore = create<AccessState>((set, get) => ({
   loading: false,
   error: null,
 
-  async startChallenge() {
+  startChallenge() {
+    if (challengeRequest) return challengeRequest;
     set({ loading: true, error: null });
-    try {
-      const { challenge } = await api.access.challenge();
-      set({ challenge, status: { epoch: challenge.epoch, maxLength: challenge.maxLength, caseSensitive: challenge.caseSensitive, configured: true }, loading: false });
-      return challenge;
-    } catch (error) {
-      set({ loading: false, error: errorMessage(error) });
-      return null;
-    }
+    challengeRequest = (async () => {
+      try {
+        const { challenge } = await api.access.challenge();
+        set({
+          challenge: get().unlocked ? null : challenge,
+          status: {
+            epoch: challenge.epoch,
+            maxLength: challenge.maxLength,
+            caseSensitive: challenge.caseSensitive,
+            configured: true,
+          },
+          loading: false,
+        });
+        return challenge;
+      } catch (error) {
+        set({ loading: false, error: errorMessage(error) });
+        return null;
+      } finally {
+        challengeRequest = null;
+      }
+    })();
+    return challengeRequest;
   },
 
   async unlockWithCode(code) {
@@ -78,6 +97,18 @@ export const useAccessStore = create<AccessState>((set, get) => ({
     }
   },
 
+  bindAuthenticatedUser(userId, accessGranted) {
+    // A late login response must not undo a privacy lock that happened while
+    // Firebase/the API was busy. Only bind an already-unlocked browser, and
+    // only when the server confirmed it issued the user-bound access cookie.
+    const unlocked = get().unlocked && accessGranted && userId !== null;
+    set({
+      unlocked,
+      boundUserId: unlocked ? userId : null,
+      ...(unlocked ? {} : { challenge: null, epoch: null, expiresAt: null }),
+    });
+  },
+
   async lock(options) {
     const wasUnlocked = get().unlocked;
     set({ unlocked: false, boundUserId: null, epoch: null, expiresAt: null, challenge: null });
@@ -87,7 +118,8 @@ export const useAccessStore = create<AccessState>((set, get) => ({
     } catch {
       // The server session will expire on its own; the UI is already locked.
     }
-    if (!options?.silent) useUiStore.getState().pushToast('Locked. Type the sequence again to continue.');
+    if (!options?.silent)
+      useUiStore.getState().pushToast('Locked. Type the sequence again to continue.');
   },
 
   async refresh() {

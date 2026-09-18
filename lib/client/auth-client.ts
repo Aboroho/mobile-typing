@@ -76,6 +76,14 @@ async function createAuthClient(): Promise<AuthClient> {
       appId: publicEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
     });
   const firebaseAuth = auth.getAuth(app);
+  if (publicEnv.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('The Firebase Auth emulator must not be used in production.');
+    }
+    // The dev server proxies the emulator endpoints. Never point a remote
+    // browser at localhost: that would connect to the visitor's own machine.
+    auth.connectAuthEmulator(firebaseAuth, window.location.origin);
+  }
 
   const toClientUser = (user: { uid: string; email: string | null; displayName: string | null } | null) =>
     user ? { uid: user.uid, email: user.email, displayName: user.displayName } : null;

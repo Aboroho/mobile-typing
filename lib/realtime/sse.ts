@@ -16,6 +16,7 @@ export interface SseOptions {
 export function createEventStream(options: SseOptions): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const heartbeatMs = options.heartbeatMs ?? 25_000;
+  let cleanup = () => {};
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -39,26 +40,24 @@ export function createEventStream(options: SseOptions): ReadableStream<Uint8Arra
         controller.enqueue(encoder.encode(`: heartbeat ${Date.now()}\n\n`));
       }, heartbeatMs);
 
-      const close = () => {
+      const lifetime = setTimeout(() => {
+        cleanup();
+        controller.close();
+      }, 30 * 60 * 1000);
+
+      cleanup = () => {
         if (closed) return;
         closed = true;
         clearInterval(heartbeat);
+        clearTimeout(lifetime);
         for (const unsubscribe of unsubscribes) unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // Already closed by the client.
-        }
       };
-
-      // Node aborts the request signal when the browser disconnects.
-      const signal = (controller as unknown as { signal?: AbortSignal }).signal;
-      signal?.addEventListener('abort', close);
-      // Browsers also send a close; give the GC a way in either case.
-      setTimeout(close, 30 * 60 * 1000);
     },
     cancel() {
-      // Stream closed by the consumer.
+      // Logout/navigation cancels the stream and closes its controller. A
+      // ReadableStream controller has no abort signal: clean up here, otherwise
+      // the next heartbeat throws "Controller is already closed" server-side.
+      cleanup();
     },
   });
 }

@@ -18,7 +18,7 @@ import { FieldError, Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { firebaseAuthMessage, getAuthClient } from '@/lib/client/auth-client';
 import { useAuthStore } from '@/stores/auth-store';
-import { useAccessStore } from '@/stores/access-store';
+
 
 type Mode = 'login' | 'register' | 'reauth';
 
@@ -36,8 +36,6 @@ type Mode = 'login' | 'register' | 'reauth';
 export function AuthPanel({ initialMode }: { initialMode: Mode }) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const { register, login, reauthenticate, error, user } = useAuthStore();
-  const bind = useAccessStore((state) => state.unlockWithCode);
-  void bind;
 
   const registerForm = useForm<RegisterFormValues>({
     resolver: zodResolver(registerFormSchema),

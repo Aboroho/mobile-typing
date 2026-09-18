@@ -13,13 +13,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetAuthClient, getAuthClient, firebaseAuthMessage } from '@/lib/client/auth-client';
 import { useAuthStore } from '@/stores/auth-store';
-import {
-  fakeFirebaseClientAuth,
-  resetFirebaseClientAuth,
-} from '../helpers/firebase-client';
+import { useAccessStore } from '@/stores/access-store';
+import { fakeFirebaseClientAuth, resetFirebaseClientAuth } from '../helpers/firebase-client';
 
 vi.mock('firebase/app', async () => (await import('../helpers/firebase-client')).firebaseAppModule);
-vi.mock('firebase/auth', async () => (await import('../helpers/firebase-client')).firebaseAuthModule);
+vi.mock(
+  'firebase/auth',
+  async () => (await import('../helpers/firebase-client')).firebaseAuthModule,
+);
 
 interface Profile {
   id: string;
@@ -46,6 +47,7 @@ interface Recorded {
 function installApiStub() {
   const profiles = new Map<string, Profile>();
   const requests: Recorded[] = [];
+  let accessGranted = true;
 
   const respond = (status: number, payload: unknown) =>
     new Response(JSON.stringify(payload), {
@@ -54,7 +56,9 @@ function installApiStub() {
     });
 
   const uidFrom = (authorization: string | null) =>
-    authorization?.startsWith('Bearer id-token-') ? authorization.slice('Bearer id-token-'.length) : null;
+    authorization?.startsWith('Bearer id-token-')
+      ? authorization.slice('Bearer id-token-'.length)
+      : null;
 
   const profileFor = (uid: string, name: string, email: string): Profile => {
     const existing = profiles.get(uid);
@@ -97,10 +101,14 @@ function installApiStub() {
             error: { code: 'UNAUTHENTICATED', message: 'complete the Firebase sign-up first' },
           });
         }
-        const profile = profileFor(uid, String(body['name'] ?? 'User'), email || `${uid}@example.com`);
+        const profile = profileFor(
+          uid,
+          String(body['name'] ?? 'User'),
+          email || `${uid}@example.com`,
+        );
         return respond(201, {
           ok: true,
-          data: { user: profile, token: null, cookieSession: true, accessGranted: true },
+          data: { user: profile, token: null, cookieSession: true, accessGranted },
         });
       }
       if (url.pathname === '/api/v1/auth/login') {
@@ -113,14 +121,17 @@ function installApiStub() {
         const profile = profileFor(uid, 'Alice', email || `${uid}@example.com`);
         return respond(200, {
           ok: true,
-          data: { user: profile, token: null, cookieSession: true, accessGranted: true },
+          data: { user: profile, token: null, cookieSession: true, accessGranted },
         });
       }
       if (url.pathname === '/api/v1/auth/reauthenticate') {
         if (!uid) {
-          return respond(401, { ok: false, error: { code: 'UNAUTHENTICATED', message: 'sign in again' } });
+          return respond(401, {
+            ok: false,
+            error: { code: 'UNAUTHENTICATED', message: 'sign in again' },
+          });
         }
-        return respond(200, { ok: true, data: { user: profiles.get(uid) ?? null, accessGranted: true } });
+        return respond(200, { ok: true, data: { user: profiles.get(uid) ?? null, accessGranted } });
       }
       if (url.pathname === '/api/v1/auth/logout') {
         return respond(200, { ok: true, data: { loggedOut: true } });
@@ -132,6 +143,9 @@ function installApiStub() {
   return {
     requests,
     profiles,
+    setAccessGranted(value: boolean) {
+      accessGranted = value;
+    },
     dropProfile(uid: string) {
       profiles.delete(uid);
     },
@@ -150,10 +164,20 @@ beforeEach(() => {
   resetAuthClient();
   api = installApiStub();
   useAuthStore.setState({ user: null, initializing: true, error: null });
+  useAccessStore.setState({
+    unlocked: true,
+    boundUserId: null,
+    challenge: null,
+    epoch: 1,
+    expiresAt: null,
+    loading: false,
+    error: null,
+  });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   resetAuthClient();
 });
@@ -174,6 +198,10 @@ describe('registration in the browser', () => {
     expect(useAuthStore.getState().error).toBeNull();
     // Firebase holds the display name, so the profile can be recreated from it.
     expect(fakeFirebaseClientAuth.currentUser?.displayName).toBe('Alice');
+    expect(useAccessStore.getState()).toMatchObject({
+      unlocked: true,
+      boundUserId: 'web_aliceexamplecom',
+    });
   });
 
   it('sends the ID token, and never a password, to this application', async () => {
@@ -185,7 +213,9 @@ describe('registration in the browser', () => {
     expect(Object.keys(register?.body ?? {})).not.toContain('password');
     expect(Object.keys(register?.body ?? {})).not.toContain('confirmPassword');
     // The password went to Firebase only.
-    expect(api.requests.filter((request) => JSON.stringify(request.body).includes('CorrectHorse1!'))).toEqual([]);
+    expect(
+      api.requests.filter((request) => JSON.stringify(request.body).includes('CorrectHorse1!')),
+    ).toEqual([]);
   });
 
   it('reports a duplicate email without saying which side refused it', async () => {
@@ -199,7 +229,9 @@ describe('registration in the browser', () => {
     expect(second.ok).toBe(false);
     expect(useAuthStore.getState().error).toBe('that email address already has an account');
     // The refusal came from Firebase, so no profile request was made for it.
-    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(1);
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(
+      1,
+    );
   });
 
   it('reuses the signed-in Firebase account when a profile request is retried', async () => {
@@ -220,11 +252,17 @@ describe('login in the browser', () => {
     await useAuthStore.getState().logout();
     useAuthStore.setState({ error: null });
 
+    // A new secret-code unlock after logout is initially anonymous.
+    useAccessStore.setState({ unlocked: true, boundUserId: null });
     const result = await useAuthStore
       .getState()
       .login({ email: credentials.email, password: credentials.password });
     expect(result.ok).toBe(true);
     expect(useAuthStore.getState().user?.email).toBe('alice@example.com');
+    expect(useAccessStore.getState()).toMatchObject({
+      unlocked: true,
+      boundUserId: 'web_aliceexamplecom',
+    });
 
     const login = api.requestFor('/api/v1/auth/login');
     expect(login?.authorization).toBe('Bearer id-token-web_aliceexamplecom');
@@ -313,7 +351,10 @@ describe('session persistence and recovery', () => {
     // Recovery went through registration, with the display name Firebase holds.
     const recovery = api.requests.filter((request) => request.path === '/api/v1/auth/register');
     expect(recovery.length).toBeGreaterThan(0);
-    expect(recovery[recovery.length - 1]?.body).toMatchObject({ name: 'Alice', email: 'alice@example.com' });
+    expect(recovery[recovery.length - 1]?.body).toMatchObject({
+      name: 'Alice',
+      email: 'alice@example.com',
+    });
   });
 
   it('stays signed out when Firebase has nobody', async () => {
@@ -327,7 +368,9 @@ describe('reauthentication and password reset', () => {
   it('re-proves the password with Firebase before binding the session', async () => {
     await useAuthStore.getState().register(credentials);
 
+    useAccessStore.setState({ unlocked: true, boundUserId: null });
     const result = await useAuthStore.getState().reauthenticate(credentials.password);
+    expect(useAccessStore.getState().boundUserId).toBe('web_aliceexamplecom');
     expect(result.ok).toBe(true);
     expect(api.requestFor('/api/v1/auth/reauthenticate')?.authorization).toBe(
       'Bearer id-token-web_aliceexamplecom',
@@ -389,5 +432,124 @@ describe('configuration and error reporting', () => {
       firebaseAuthMessage({ code: 'auth/user-not-found' }),
     );
     expect(firebaseAuthMessage(new Error('something else'))).toBeNull();
+  });
+});
+
+/** Hold an API response after it was produced, simulating a slow network. */
+function pauseResponse(path: string) {
+  const fetchImpl = globalThis.fetch;
+  let release!: () => void;
+  let arrived!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetchImpl(input, init);
+      if (String(input) === path) {
+        arrived();
+        await paused;
+      }
+      return response;
+    }),
+  );
+  return { started, release };
+}
+
+describe('auth/access state synchronisation', () => {
+  it('restores once and installs only one observer under StrictMode', async () => {
+    const client = await getAuthClient();
+    const subscribe = vi.spyOn(client, 'onAuthChange');
+    await Promise.all([useAuthStore.getState().initialize(), useAuthStore.getState().initialize()]);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/me')).toHaveLength(1);
+  });
+
+  it('does not let the Firebase observer race explicit profile creation', async () => {
+    await useAuthStore.getState().initialize();
+    api.requests.length = 0;
+
+    await useAuthStore.getState().register(credentials);
+    // Also allow the SDK's asynchronous initial state emission to run.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(
+      1,
+    );
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/me')).toHaveLength(0);
+    expect(useAuthStore.getState().user?.name).toBe('Alice');
+    expect(useAccessStore.getState().boundUserId).toBe('web_aliceexamplecom');
+  });
+
+  it('does not grant access when the server did not bind the cookie', async () => {
+    api.setAccessGranted(false);
+    const result = await useAuthStore.getState().register(credentials);
+    expect(result).toEqual({ ok: true, accessGranted: false });
+    expect(useAccessStore.getState()).toMatchObject({ unlocked: false, boundUserId: null });
+  });
+
+  it('does not undo a privacy lock when a slow registration finishes', async () => {
+    const delayed = pauseResponse('/api/v1/auth/register');
+    const registration = useAuthStore.getState().register(credentials);
+    await delayed.started;
+    await useAccessStore.getState().lock({ silent: true });
+    delayed.release();
+    expect((await registration).ok).toBe(true);
+    expect(useAccessStore.getState()).toMatchObject({ unlocked: false, boundUserId: null });
+  });
+
+  it('ignores a stale startup read instead of registering a second time', async () => {
+    await fakeFirebaseClientAuth.createUser(credentials.email, credentials.password);
+    const delayed = pauseResponse('/api/v1/auth/me');
+    const restoring = useAuthStore.getState().initialize();
+    await delayed.started;
+
+    await useAuthStore.getState().register(credentials);
+    delayed.release();
+    await restoring;
+
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(
+      1,
+    );
+    expect(useAuthStore.getState().user?.name).toBe('Alice');
+    expect(useAccessStore.getState().boundUserId).toBe('web_aliceexamplecom');
+  });
+
+  it('does not let a stale session response sign the user back in after logout', async () => {
+    await useAuthStore.getState().register(credentials);
+    const delayed = pauseResponse('/api/v1/auth/me');
+    const restoring = useAuthStore.getState().initialize();
+    await delayed.started;
+
+    await useAuthStore.getState().logout();
+    delayed.release();
+    await restoring;
+
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAccessStore.getState()).toMatchObject({ unlocked: false, boundUserId: null });
+  });
+});
+
+describe('explicit Auth emulator support', () => {
+  it('uses the page origin, never a browser-side localhost backend URL', async () => {
+    vi.stubEnv('NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED', 'true');
+    await getAuthClient();
+    expect(fakeFirebaseClientAuth.emulatorUrl).toBe(window.location.origin);
+  });
+
+  it('does not connect to an emulator by default', async () => {
+    await getAuthClient();
+    expect(fakeFirebaseClientAuth.emulatorUrl).toBeNull();
+  });
+
+  it('refuses emulator mode in a production browser build', async () => {
+    vi.stubEnv('NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_ENABLED', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expect(getAuthClient()).rejects.toThrow('must not be used in production');
+    expect(fakeFirebaseClientAuth.emulatorUrl).toBeNull();
   });
 });

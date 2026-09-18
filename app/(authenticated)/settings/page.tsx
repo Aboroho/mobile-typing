@@ -66,8 +66,10 @@ export default function SettingsPage() {
           onClick={async () => {
             disconnectAllStreams();
             await endCallForPrivacyLock();
+            // logout clears access state as well as the Firebase session.
+            // Locking again can erase the next challenge after the guard has
+            // already returned the browser to the typing game.
             await logout();
-            await lock({ silent: true });
             router.replace('/');
           }}
           className="flex w-full items-center gap-3 px-4 py-3 text-left text-danger hover:bg-danger/5"
