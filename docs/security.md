@@ -157,7 +157,24 @@ audit entry.
   attacker with the Firebase Admin credentials, or with database access, can read
   all content.
 - **Delivery and read receipts are best effort** over SSE; a client that is
-  offline simply does not advance them.
+  offline simply does not advance them (it acknowledges what it missed on the
+  next open or reconnect). Receipts are validated server side: only the other
+  participant can advance a message, states only move forward, and the client's
+  own `deliveryState` values are never accepted as input. A "seen" receipt is
+  sent only for a message rendered in a visible document — never for a
+  background tab — but it cannot prove a human looked at it.
+- **Typing indicators** are relayed to the other participant only and never
+  stored; they are throttled client side (one ping per few seconds) and expire
+  on the receiver after 7 s, so they cannot be used to observe activity beyond
+  "this participant was typing in this conversation just now".
+- **Hiding the chat is privacy, not authorisation.** The Hide button, double
+  tap, triple tap and the 60 s-hidden rule remove private content from the
+  screen and memory and revoke the access session, but a tab that is suspended
+  or closed before the revoke request is sent leaves the httpOnly cookie valid
+  until its own TTL (30 min). The API keeps validating both cookies on every
+  request regardless of what the client believes. Background execution is not
+  guaranteed on mobile; the guarantee is that the chat is closed before it is
+  shown again once the threshold has passed (`docs/messaging-sync.md` §5).
 
 ## Screenshot prevention: what is and is not possible
 

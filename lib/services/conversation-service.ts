@@ -110,28 +110,6 @@ export async function getConversationView(
   );
 }
 
-export async function markConversationRead(input: {
-  userId: string;
-  conversationId: string;
-  lastReadMessageAt: string;
-}): Promise<void> {
-  const data = await getData();
-  const conversation = await requireParticipant(input.conversationId, input.userId);
-  await data.conversations.updateParticipant(input.conversationId, input.userId, {
-    lastReadAt: nowIso(),
-    lastReadMessageAt: input.lastReadMessageAt,
-    unreadCount: 0,
-    hidden: false,
-    hiddenAt: null,
-  });
-  publish(topics.conversation(input.conversationId), 'conversation.read', {
-    conversationId: input.conversationId,
-    userId: input.userId,
-    lastReadMessageAt: input.lastReadMessageAt,
-    otherUserId: otherParticipant(conversation, input.userId),
-  });
-}
-
 export async function setConversationHidden(input: {
   userId: string;
   conversationId: string;
@@ -166,6 +144,13 @@ export async function setBlocked(input: {
   });
 }
 
+/**
+ * Typing indicators are ephemeral by design: they are relayed over the realtime
+ * bus to the other participant only (`otherUserId` filters the stream) and are
+ * never persisted, so there is nothing to expire, clean up or leak through a
+ * database read. The receiver expires the indicator itself after
+ * `TYPING_TTL_MS` without a refresh (`lib/browser/typing-indicator.ts`).
+ */
 export async function setTyping(input: {
   userId: string;
   conversationId: string;
@@ -176,6 +161,7 @@ export async function setTyping(input: {
     conversationId: input.conversationId,
     userId: input.userId,
     isTyping: input.isTyping,
+    at: nowIso(),
     otherUserId: otherParticipant(conversation, input.userId),
   });
 }

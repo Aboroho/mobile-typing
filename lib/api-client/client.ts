@@ -48,6 +48,7 @@ import type {
   MessageListResponse,
   PresenceResponse,
   ReauthenticateResult,
+  ReceiptResponse,
   SendMessageResponse,
   SessionUser,
   TypingSessionResponse,
@@ -282,7 +283,7 @@ export function createApiClient(init: ApiClientInit = {}) {
       get: (conversationId: string) =>
         request<ConversationDetailResponse>(`/api/v1/conversations/${conversationId}`),
       markRead: (conversationId: string, input: MarkConversationReadInput) =>
-        request<{ ok: true }>(`/api/v1/conversations/${conversationId}/read`, {
+        request<{ ok: true } & ReceiptResponse>(`/api/v1/conversations/${conversationId}/read`, {
           method: 'POST',
           body: input,
         }),
@@ -320,7 +321,7 @@ export function createApiClient(init: ApiClientInit = {}) {
       remove: (messageId: string, input: DeleteMessageInput = { scope: 'everyone' }) =>
         request<{ deleted: true }>(`/api/v1/messages/${messageId}`, { method: 'DELETE', body: input }),
       markDelivered: (conversationId: string, input: MarkDeliveredInput) =>
-        request<{ updated: number }>(`/api/v1/conversations/${conversationId}/messages/delivery`, {
+        request<ReceiptResponse>(`/api/v1/conversations/${conversationId}/messages/delivery`, {
           method: 'POST',
           body: input,
         }),

@@ -58,8 +58,8 @@ and any future client, and no timezone conversion is needed anywhere. See
 | `media` | `MediaView \| null` | Embedded snapshot (never the storage path) |
 | `call` | `CallView \| null` | For `type: 'call'` history entries |
 | `replyTo` | `ReplyReference \| null` | `messageId`, `senderId`, `type`, `preview`, `createdAt` |
-| `deliveryState` | `'sending' \| 'sent' \| 'delivered' \| 'read' \| 'failed'` | `DELIVERY_RANK` prevents a downgrade; `failed → sending` is the only backwards move (a retry) |
-| `deliveredAt`, `readAt` | string \| null | |
+| `deliveryState` | `'sent' \| 'delivered' \| 'read'` on the server (`'sending'`/`'failed'` exist only in the sender's browser) | Stored as `sent`; only the *other* participant advances it, via explicit receipts (`…/messages/delivery`) or the read watermark (`…/read`). `DELIVERY_RANK` prevents a downgrade. Exact semantics: `docs/messaging-sync.md` §3 |
+| `deliveredAt`, `readAt` | string \| null | First time the recipient's device synced the message / first time it was seen; never overwritten once set |
 | `readBy` | string[] | |
 | `edited` | boolean | |
 | `editedAt` | string \| null | |
@@ -133,11 +133,13 @@ Read and written only by the Admin SDK.
 ## Indexes
 
 `firebase/firestore.indexes.json` declares the composite indexes the queries
-need: messages by (`deleted`, `createdAt` desc) and a collection-group index
-by (`senderId`, `createdAt` desc); users by (`status`, `searchKey`);
-conversation items by (`hidden`, `lastActivityAt` desc); media by
-(`deleted`, `kind`, `createdAt` desc); audit logs by (`action`,
-`createdAt` desc).
+need: messages by (`deleted`, `createdAt` desc), by (`senderId`,
+`deliveryState`, `createdAt` desc) for the read-watermark query
+(`listPendingReadReceipts`: the peer's messages still `sent`/`delivered` at or
+before the watermark) and a collection-group index by (`senderId`, `createdAt`
+desc); users by (`status`, `searchKey`); conversation items by (`hidden`,
+`lastActivityAt` desc); media by (`deleted`, `kind`, `createdAt` desc); audit
+logs by (`action`, `createdAt` desc).
 
 It also declares `fieldOverrides` for the `messages` collection group —
 single-field indexes on `messageId`, `deleted` and `createdAt` with

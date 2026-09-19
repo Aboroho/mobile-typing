@@ -115,6 +115,13 @@ Realtime updates are pushed over SSE (`/conversations/[id]/events`,
 `EventSource`. Firestore change feeds are the documented upgrade path
 (`docs/decisions.md`).
 
+On the client, `stores/chat-store.ts` is the single source of truth for
+messages: one stream per open conversation, every input (optimistic placeholder,
+send response, stream event, page, reconnect catch-up, receipt) merged through the
+pure rules in `lib/domain/message-sync.ts` under one logical key
+(`clientMessageId ?? id`). Message states, delivery/read receipts, typing
+indicators and the sync model are specified in `docs/messaging-sync.md`.
+
 ## 5. The access gate (first visit)
 
 Every visitor — including administrators — starts at the typing game. Nothing
@@ -180,20 +187,32 @@ Browser                                   Server
   by an integration test that asserts a previously unlocked browser is locked
   out immediately.
 
-### 5.2 Locking
+### 5.2 Locking (hiding the chat)
 
-The app returns to the typing game and clears unlock state when:
+Every path goes through `hideChat()` (`lib/client/privacy-lock.ts`), which locks
+synchronously — blur class on `<html>`, access store to locked (the shell renders
+the typing game), chat state wiped, streams closed, call ended — and then revokes
+the server access session. The app returns to the typing game when:
 
-- the user **triple-taps** (three taps within 600 ms, each within 40 px of the
-  previous one, detected from both `touchstart` and `pointerdown`);
-- the tab is **hidden or minimised** (`visibilitychange`, plus `pagehide` and
-  `blur` as fallbacks);
+- the user taps the **Hide** button in the chat header or the conversation list;
+- the user **double-taps** the message area (pointer-event detector with time and
+  distance thresholds; taps on inputs, buttons, links, media controls and other
+  interactive elements never count);
+- the user **triple-taps** anywhere (kept from the previous behaviour);
+- the page has been **hidden for more than 60 s** (`CHAT_HIDDEN_LOCK_MS`) —
+  `visibilitychange`/`pagehide`/`freeze` start a stamped countdown, and every
+  return (`visibilitychange`/`pageshow`/`resume`/`focus`, or the next page load)
+  compares elapsed time, so suspended mobile tabs are handled. **Losing focus
+  alone never locks**: a visible chat next to another window keeps working;
 - the access session **expires** (30 min) or is revoked by a rotation — the API
-  client dispatches `mt:access-required`, which the provider turns into a lock;
+  client dispatches `mt:access-required`;
 - the user chooses **Lock now** or **Sign out** in Settings.
 
 Locking during a call ends the call through `POST /api/v1/calls/{id}/end` first,
-so no call record is left ringing.
+so no call record is left ringing. Background execution is not guaranteed while
+a tab is hidden (browsers throttle or suspend it); the guarantee is that the chat
+is closed before it is shown again once the threshold has passed. Details and
+limitations: `docs/messaging-sync.md` §5.
 
 ### 5.3 Session invalidation strategy
 

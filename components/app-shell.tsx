@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { parsePublicEnv } from '@mt/config';
 import { useAccessStore } from '@/stores/access-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { useUiStore } from '@/stores/ui-store';
+import { hideChat } from '@/lib/client/privacy-lock';
 import { useKeystrokeUnlock } from '@/hooks/use-keystroke-unlock';
 import { useTripleTap } from '@/hooks/use-triple-tap';
-import { useVisibilityLock } from '@/hooks/use-visibility-lock';
+import { useInactivityLock } from '@/hooks/use-inactivity-lock';
 import { TypingGameScreen } from '@/components/typing-game/typing-game-screen';
 import { AuthPanel } from '@/components/auth/auth-panel';
 import { ConversationList } from '@/components/conversations/conversation-list';
@@ -28,26 +30,30 @@ const GAME_ENABLED = parsePublicEnv().NEXT_PUBLIC_ENABLE_TYPING_GAME;
  * rendered, routed or hinted at until all three are satisfied. When the game
  * is disabled, the access-session gate is skipped and visitors go straight to
  * authentication → chat.
+ *
+ * Hiding the chat (hide button, double tap, triple tap, 60 s hidden, access
+ * expiry) goes through `hideChat()`, which flips `unlocked` to false in the same
+ * tick — the typing game is what renders next, never an intermediate screen.
  */
 export function AppShell() {
   const challenge = useAccessStore((state) => state.challenge);
   const unlocked = useAccessStore((state) => state.unlocked) || !GAME_ENABLED;
   const boundUserId = useAccessStore((state) => state.boundUserId);
   const startChallenge = useAccessStore((state) => state.startChallenge);
-  const lock = useAccessStore((state) => state.lock);
+  const setPrivacyLocked = useUiStore((state) => state.setPrivacyLocked);
   const user = useAuthStore((state) => state.user);
   const initializing = useAuthStore((state) => state.initializing);
-  const privacyLocked = useUiPrivacy();
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   useKeystrokeUnlock(GAME_ENABLED && !unlocked ? challenge : null);
-  useVisibilityLock(GAME_ENABLED);
+  // Hidden (tab/app in background, screen off) for more than 60 s → back to the
+  // game. Losing focus alone never locks; see the hook for the full rule.
+  useInactivityLock(GAME_ENABLED);
 
   const handleTripleTap = useCallback(() => {
     if (!unlocked) return;
-    setConversationId(null);
-    void lock();
-  }, [unlocked, lock]);
+    hideChat('triple-tap');
+  }, [unlocked]);
   // Triple tap only matters once the chat is reachable, and only makes sense
   // when there is a game/lock screen to return to.
   useTripleTap(handleTripleTap, GAME_ENABLED && unlocked);
@@ -62,9 +68,12 @@ export function AppShell() {
     if (GAME_ENABLED && !unlocked && !challenge) void startChallenge();
   }, [unlocked, challenge, startChallenge]);
 
-  if (GAME_ENABLED && privacyLocked && !unlocked) {
-    return <LockedScreen />;
-  }
+  // After a lock the next unlock starts from the conversation list, and the
+  // blur class set by `hideChat()` is lifted once the chat is reachable again.
+  useEffect(() => {
+    if (!unlocked) setConversationId(null);
+    else setPrivacyLocked(false);
+  }, [unlocked, setPrivacyLocked]);
 
   if (GAME_ENABLED && !unlocked) {
     return <TypingGameScreen />;
@@ -87,36 +96,6 @@ export function AppShell() {
   }
 
   return <ConversationList onOpen={setConversationId} />;
-}
-
-function useUiPrivacy() {
-  const [locked, setLocked] = useState(false);
-  useEffect(() => {
-    const onChange = () => setLocked(document.documentElement.classList.contains('privacy-locked'));
-    const observer = new MutationObserver(onChange);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    onChange();
-    return () => observer.disconnect();
-  }, []);
-  return locked;
-}
-
-function LockedScreen() {
-  return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-3 px-6 text-center">
-      <h1 className="text-lg font-semibold">Locked</h1>
-      <p className="max-w-xs text-sm text-ink-muted">
-        The screen was hidden, so the session was closed. Return to the typing test to continue.
-      </p>
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white"
-      >
-        Back to the typing test
-      </button>
-    </main>
-  );
 }
 
 function CenteredSpinner({ label }: { label: string }) {

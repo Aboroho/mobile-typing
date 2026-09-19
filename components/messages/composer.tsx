@@ -23,27 +23,26 @@ export function Composer({
   const [text, setText] = useState('');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [viewOnce, setViewOnce] = useState(false);
-  const typingRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const sendText = useChatStore((state) => state.sendText);
   const sendMedia = useChatStore((state) => state.sendMedia);
-  const setTyping = useChatStore((state) => state.setTyping);
+  const noteComposerActivity = useChatStore((state) => state.noteComposerActivity);
+  const stopTyping = useChatStore((state) => state.stopTyping);
   const upload = useMediaUpload();
   const recorder = useVoiceRecorder();
 
+  // Leaving the conversation (or unmounting) ends the typing indicator at once.
   useEffect(() => {
-    return () => setTyping(conversationId, false);
-  }, [conversationId, setTyping]);
+    return () => stopTyping(conversationId);
+  }, [conversationId, stopTyping]);
 
-  const notifyTyping = () => {
-    if (typingRef.current) return;
-    typingRef.current = true;
-    setTyping(conversationId, true);
-    setTimeout(() => {
-      typingRef.current = false;
-      setTyping(conversationId, false);
-    }, 2500);
+  // Composer changes feed the throttled typing publisher in the store: one
+  // "typing" per heartbeat while keys are pressed, "stopped" after 2.5 s idle,
+  // and an immediate stop when the text is cleared.
+  const updateText = (value: string) => {
+    setText(value);
+    noteComposerActivity(conversationId, value.trim().length > 0);
   };
 
   const submit = async () => {
@@ -51,6 +50,7 @@ export function Composer({
     if (!value) return;
     setText('');
     onClearReply();
+    // `sendText` stops the indicator before the request leaves.
     await sendText(conversationId, value, replyToId ?? undefined);
   };
 
@@ -64,7 +64,7 @@ export function Composer({
   };
 
   return (
-    <div className="border-t border-line bg-surface px-2 py-2 safe-bottom">
+    <div className="border-t border-line bg-surface px-2 py-2 safe-bottom" data-no-hide-gesture>
       {upload.progress.phase !== 'idle' && upload.progress.phase !== 'done' ? (
         <div className="mb-2 flex items-center gap-2 rounded-lg bg-surface-raised px-3 py-2 text-xs text-ink-muted">
           <span>{upload.progress.phase === 'compressing' ? 'Preparing image…' : 'Uploading…'}</span>
@@ -117,7 +117,7 @@ export function Composer({
             <button
               key={emoji}
               type="button"
-              onClick={() => setText((current) => `${current}${emoji}`)}
+              onClick={() => updateText(`${text}${emoji}`.slice(0, MESSAGE_MAX_LENGTH))}
               className="rounded p-1 text-xl hover:bg-surface-sunken"
             >
               {emoji}
@@ -157,10 +157,7 @@ export function Composer({
         />
         <textarea
           value={text}
-          onChange={(event) => {
-            setText(event.target.value.slice(0, MESSAGE_MAX_LENGTH));
-            notifyTyping();
-          }}
+          onChange={(event) => updateText(event.target.value.slice(0, MESSAGE_MAX_LENGTH))}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
@@ -170,6 +167,7 @@ export function Composer({
           rows={1}
           placeholder="Message"
           aria-label="Message"
+          enterKeyHint="send"
           className="max-h-28 flex-1 resize-none rounded-2xl border border-line bg-surface-raised px-3 py-2 text-sm outline-none focus:border-brand"
         />
         {text.trim() ? (

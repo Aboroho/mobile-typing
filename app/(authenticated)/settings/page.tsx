@@ -4,16 +4,13 @@ import { ArrowLeft, LogOut, Lock, Moon, Sun, User as UserIcon } from 'lucide-rea
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import { useAccessStore } from '@/stores/access-store';
 import { useUiStore } from '@/stores/ui-store';
-import { disconnectAllStreams } from '@/stores/chat-store';
-import { endCallForPrivacyLock } from '@/stores/call-store';
+import { hideChat } from '@/lib/client/privacy-lock';
 
 export default function SettingsPage() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
-  const lock = useAccessStore((state) => state.lock);
   const theme = useUiStore((state) => state.theme);
   const toggleTheme = useUiStore((state) => state.toggleTheme);
 
@@ -47,10 +44,8 @@ export default function SettingsPage() {
         </button>
         <button
           type="button"
-          onClick={async () => {
-            disconnectAllStreams();
-            await endCallForPrivacyLock();
-            await lock();
+          onClick={() => {
+            hideChat('manual');
             router.replace('/');
           }}
           className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-sunken"
@@ -64,10 +59,8 @@ export default function SettingsPage() {
         <button
           type="button"
           onClick={async () => {
-            disconnectAllStreams();
-            await endCallForPrivacyLock();
+            hideChat('manual');
             await logout();
-            await lock({ silent: true });
             router.replace('/');
           }}
           className="flex w-full items-center gap-3 px-4 py-3 text-left text-danger hover:bg-danger/5"
@@ -78,7 +71,8 @@ export default function SettingsPage() {
       </section>
 
       <p className="px-2 text-[11px] text-ink-faint">
-        The app locks automatically when this tab is hidden or minimised.
+        The chat hides automatically after this tab has been hidden or minimised for more than a minute.
+        Switching windows without hiding the tab does not lock it.
       </p>
     </main>
   );

@@ -2,8 +2,9 @@
 
 A mobile-first, private 1:1 messaging web app that presents itself to every
 visitor as a typing-practice game. The chat is reachable only by typing a
-secret code into the game and then authenticating; it locks itself the moment
-the tab is hidden or the user triple-taps.
+secret code into the game and then authenticating; it hides itself on a tap of
+the **Hide** button, a double tap on the messages, a triple tap anywhere, or
+after the tab has been hidden for more than a minute.
 
 Built as a **single Next.js app** (App Router) with TypeScript, Tailwind,
 Zustand, Zod and Firebase (Auth, Firestore, Storage, Admin SDK), plus WebRTC
@@ -132,9 +133,25 @@ word list fails to load, a built-in fallback keeps **Start test** working.
 Set `NEXT_PUBLIC_ENABLE_TYPING_GAME=false` to disable the game and the
 secret-code gate entirely — visitors then land straight on sign-in and chat.
 
-**Locking** — triple tap (touch + pointer, with time and distance thresholds) and
-tab hide/minimise both return to the game and clear unlock state; an active call
-is ended through the API first.
+**Hiding the chat** — a **Hide** button in the chat header and the conversation
+list, a **double tap** on the message area (pointer events with time and
+distance thresholds; taps on inputs, buttons, links and media controls never
+count), the triple tap, and an **inactivity rule**: hidden (tab switched,
+minimised, screen off, app in background) for more than **60 s**. Coming back
+sooner keeps everything; losing focus alone never locks, so the chat stays
+usable next to another window. All paths clear the client state synchronously,
+revoke the access session and return to the typing game; an active call is
+ended through the API first. Background execution is not guaranteed on mobile,
+so the moment of hiding is stamped and compared on return — see
+[`docs/messaging-sync.md`](./docs/messaging-sync.md).
+
+**Message states** — `sending → sent → delivered → seen`, plus `failed` with
+retry (same idempotency key, so a retry can never duplicate). *Delivered* means
+the recipient's device synchronised the message; *seen* means it was rendered
+in a visible window and the read receipt succeeded. Receipts are batched,
+validated server side (only the other participant, never backwards) and pushed
+live. Typing indicators are throttled, expire on their own and are relayed to
+the other participant only.
 
 **Authentication** — Firebase Authentication (email/password) only. The browser
 SDK verifies the password and holds the ID token; the API verifies that token
@@ -254,6 +271,7 @@ TURN_SERVER_CREDENTIAL=<secret>
 | [`docs/security.md`](./docs/security.md) | Threat model, defence in depth, credentials, cookies, headers |
 | [`docs/deployment.md`](./docs/deployment.md) | Environment variables, Firebase, TURN, Vercel, troubleshooting |
 | [`docs/decisions.md`](./docs/decisions.md) | Architectural decisions with rejected alternatives |
+| [`docs/messaging-sync.md`](./docs/messaging-sync.md) | Message identity and reconciliation (the duplicate-message root cause), state model, receipts, typing indicators, chat hiding |
 
 ## Limitations
 

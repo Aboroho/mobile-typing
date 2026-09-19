@@ -3,8 +3,9 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useCallStore } from '@/stores/call-store';
-import { initTheme, useUiStore } from '@/stores/ui-store';
+import { initTheme } from '@/stores/ui-store';
 import { useAccessStore } from '@/stores/access-store';
+import { hideChat } from '@/lib/client/privacy-lock';
 import { ToastHost } from '@/components/ui/toast-host';
 import { CallOverlay } from '@/components/audio-calls/call-overlay';
 
@@ -16,9 +17,7 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
   const initialize = useAuthStore((state) => state.initialize);
   const user = useAuthStore((state) => state.user);
   const handleSessionRequired = useAuthStore((state) => state.handleSessionRequired);
-  const lock = useAccessStore((state) => state.lock);
   const refreshAccess = useAccessStore((state) => state.refresh);
-  const setPrivacyLocked = useUiStore((state) => state.setPrivacyLocked);
 
   useEffect(() => {
     initTheme();
@@ -28,13 +27,10 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
 
   // A revoked/expired access session (403 ACCESS_REQUIRED) returns to the game.
   useEffect(() => {
-    const onAccessRequired = () => {
-      setPrivacyLocked(true);
-      void lock({ silent: true });
-    };
+    const onAccessRequired = () => hideChat('access-expired');
     globalThis.addEventListener('mt:access-required', onAccessRequired);
     return () => globalThis.removeEventListener('mt:access-required', onAccessRequired);
-  }, [lock, setPrivacyLocked]);
+  }, []);
 
   // A rejected Firebase credential (401 UNAUTHENTICATED / 403 ACCOUNT_DISABLED)
   // drops the session, so the sign-in panel returns instead of every request

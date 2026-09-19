@@ -29,6 +29,7 @@ import type {
   ListUsersParams,
   MediaRepo,
   MessageRepo,
+  PendingReceiptsParams,
   RateLimitRepo,
   TypingSessionRepo,
   UserRecord,
@@ -265,6 +266,33 @@ class MemoryMessages implements MessageRepo {
     const next = { ...current, ...patch, updatedAt: nowIso() };
     this.store.set(messageId, next);
     return { ...next };
+  }
+
+  async listPendingReadReceipts(params: PendingReceiptsParams): Promise<Message[]> {
+    const upTo = new Date(params.upTo).getTime();
+    return values(this.store)
+      .filter((message) => message.conversationId === params.conversationId)
+      .filter((message) => message.senderId === params.senderId)
+      .filter((message) => message.deliveryState === 'sent' || message.deliveryState === 'delivered')
+      .filter((message) => new Date(message.createdAt).getTime() <= upTo)
+      .sort(compareNewestFirst)
+      .slice(0, params.limit)
+      .map((message) => ({ ...message }));
+  }
+
+  async updateMany(
+    conversationId: string,
+    messages: readonly Message[],
+    patch: (message: Message) => Partial<Message>,
+  ): Promise<void> {
+    const at = nowIso();
+    for (const message of messages) {
+      const current = this.store.get(message.id);
+      if (!current || current.conversationId !== conversationId) continue;
+      // `patch` receives the caller's copy (which may carry the intended next
+      // state), exactly like the Firestore implementation.
+      this.store.set(message.id, { ...current, ...patch(message), updatedAt: at });
+    }
   }
 
   async countForConversation(conversationId: string): Promise<number> {

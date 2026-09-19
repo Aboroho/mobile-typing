@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MessageSquarePlus, MessagesSquare, Settings } from 'lucide-react';
+import { EyeOff, MessageSquarePlus, MessagesSquare, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { CHAT_HIDING_AVAILABLE, hideChat } from '@/lib/client/privacy-lock';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -24,13 +25,25 @@ export function ConversationList({ onOpen }: { onOpen: (conversationId: string) 
   }, [loadConversations]);
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col md:max-w-2xl lg:max-w-3xl">
+    <div className="privacy-blur mx-auto flex min-h-dvh w-full max-w-lg flex-col md:max-w-2xl lg:max-w-3xl">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface/95 px-4 py-3 backdrop-blur">
         <div>
           <h1 className="text-lg font-semibold leading-tight">Chats</h1>
           <p className="text-xs text-ink-muted">{user?.name ?? 'Signed in'}</p>
         </div>
         <div className="flex items-center gap-1">
+          {CHAT_HIDING_AVAILABLE ? (
+            <button
+              type="button"
+              onClick={() => hideChat('hide-button')}
+              aria-label="Hide chats and return to the typing game"
+              title="Hide"
+              className="flex h-10 items-center gap-1 rounded-full px-3 text-ink-muted hover:bg-danger/10 hover:text-danger"
+            >
+              <EyeOff className="h-5 w-5" />
+              <span className="hidden text-xs font-medium sm:inline">Hide</span>
+            </button>
+          ) : null}
           <Link href="/settings" aria-label="Settings" className="rounded-full p-2 text-ink-muted hover:bg-surface-raised">
             <Settings className="h-5 w-5" />
           </Link>

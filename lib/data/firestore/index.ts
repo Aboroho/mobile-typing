@@ -46,12 +46,16 @@ import type {
   ListUsersParams,
   MediaRepo,
   MessageRepo,
+  PendingReceiptsParams,
   RateLimitRepo,
   TypingSessionRepo,
   UserRecord,
   UserRepo,
   ViewOnceClaim,
 } from '../types';
+
+/** Maximum number of writes Firestore accepts in one batch. */
+const FIRESTORE_BATCH_LIMIT = 500;
 
 const COLLECTIONS = {
   users: 'users',
@@ -416,6 +420,42 @@ class FirestoreMessages implements MessageRepo {
         merge: true,
       });
     return this.getById(messageId);
+  }
+
+  async listPendingReadReceipts(params: PendingReceiptsParams): Promise<Message[]> {
+    // Composite index: senderId ASC, deliveryState ASC, createdAt DESC
+    // (declared in firebase/firestore.indexes.json).
+    const snapshot = await this.messagesOf(params.conversationId)
+      .where('senderId', '==', params.senderId)
+      .where('deliveryState', 'in', ['sent', 'delivered'])
+      .where('createdAt', '<=', params.upTo)
+      .orderBy('createdAt', 'desc')
+      .limit(params.limit)
+      .get();
+    return snapshot.docs.map((doc) => toMessage(doc.id, doc.data()));
+  }
+
+  async updateMany(
+    conversationId: string,
+    messages: readonly Message[],
+    patch: (message: Message) => Partial<Message>,
+  ): Promise<void> {
+    if (messages.length === 0) return;
+    const at = nowIso();
+    const collection = this.messagesOf(conversationId);
+    // Firestore batches are capped at 500 writes; receipts are far below that,
+    // but chunking keeps the method correct for any caller.
+    for (let start = 0; start < messages.length; start += FIRESTORE_BATCH_LIMIT) {
+      const batch = db().batch();
+      for (const message of messages.slice(start, start + FIRESTORE_BATCH_LIMIT)) {
+        batch.set(
+          collection.doc(message.id),
+          stripUndefined({ ...patch(message), updatedAt: at } as unknown as DocumentData),
+          { merge: true },
+        );
+      }
+      await batch.commit();
+    }
   }
 
   async countForConversation(conversationId: string): Promise<number> {

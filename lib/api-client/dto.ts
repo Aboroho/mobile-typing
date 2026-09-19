@@ -98,6 +98,15 @@ export interface SendMessageResponse {
   conversation: ConversationView;
 }
 
+/**
+ * Result of a delivery/read receipt. `messageIds` lists exactly the messages
+ * whose state advanced, so a client can mirror the change without a refetch.
+ */
+export interface ReceiptResponse {
+  updated: number;
+  messageIds: string[];
+}
+
 export interface UploadIntentResponse {
   mediaId: string;
   storagePath: string;

@@ -190,3 +190,51 @@ client-supplied uid (an authentication bypass).
 Tests replace the Admin SDK at the `getAdminAuth()` boundary instead, so the
 route-handler tests stay honest about the credential flow without a network
 service — at the price of not covering Google's own verification code.
+
+## 20. Message identity is the client id; the list is a merge, never an append
+
+The duplicate-message bug (see `docs/messaging-sync.md` §1) came from two
+identities for one message: the optimistic row used `clientMessageId` as its `id`
+while the stream delivered the server id first, and the list matched by `id`
+alone. The fix defines one logical key — `clientMessageId ?? id` — and routes
+every input (placeholder, response, stream event, page, reconnect catch-up,
+receipt) through pure merge functions in `lib/domain/message-sync.ts`.
+
+- Retries reuse the original `clientMessageId`, so the server's idempotency
+  (`findByClientMessageId`) is what prevents a second copy when the first attempt
+  actually landed.
+- A placeholder never overrides a canonical row; delivery states never move
+  backwards; identical input returns the same array so React does not re-render.
+- React keys are the same logical key, so a bubble is updated in place when the
+  server's copy arrives.
+
+*Alternatives rejected*: suppressing the sender's own `message.created` event
+(hides the bug for one tab, breaks a second tab of the same user); delaying the
+publish until after the response (turns a race into a slower race); CSS or a
+timer to hide the extra row (not a fix).
+
+## 21. Read receipts are a watermark; delivered receipts are explicit
+
+`delivered` means the recipient's device has synchronised the message, so the
+client acknowledges exact ids as soon as it has them (batched, one request).
+`read` means the message was rendered in a visible document, which the client
+detects per bubble with an IntersectionObserver — but it reports a single
+watermark (`lastReadMessageAt`), and the server advances every peer message at or
+before it. That keeps writes bounded, matches how a thread is actually read
+(everything above a visible message has been scrolled past), and lets the sender
+receive one event instead of one per message. Only the other participant can
+advance a message, and transitions are monotonic, so a client cannot invent or
+undo a receipt.
+
+## 22. "Hidden for 60 s", not "lost focus"
+
+The privacy lock used to fire on `blur` and on the first `visibilitychange`.
+That made the chat unusable side by side with another window and closed it on a
+brief notification swipe. The rule is now: hidden (Page Visibility) for more than
+`CHAT_HIDDEN_LOCK_MS`; focus changes are ignored. Because background timers are
+unreliable on phones, the moment the page was hidden is stamped (memory +
+`sessionStorage`) and compared on every return and on mount, so a suspended or
+restored tab is judged by elapsed time rather than by whether a timer managed to
+run. The explicit ways to hide instantly — header **Hide** button, double tap on
+the message area, the existing triple tap — all share one coordinator
+(`hideChat()`), which locks synchronously before any network round trip.

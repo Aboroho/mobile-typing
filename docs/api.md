@@ -92,12 +92,12 @@ Password reset is not an API route: the browser calls Firebase's
 | `POST /conversations` | auth | Body `{ participantId }`. Idempotent: the same pair always resolves to the same conversation (keyed by the sorted participant ids). |
 | `GET /conversations/{id}` | auth | Full conversation view. Non-participants get 404. |
 | `GET /conversations/{id}/messages?limit=&before=&after=&q=` | auth | Paginated messages, newest last. |
-| `POST /conversations/{id}/read` | auth | Body `{ lastReadMessageAt, lastReadMessageId? }`; clears the unread counter. |
+| `POST /conversations/{id}/read` | auth | Body `{ lastReadMessageAt, lastReadMessageId? }`. Read **watermark**: clears the unread counter and advances every message from the other participant created at or before `lastReadMessageAt` to `read` (bounded to 200 per call; the reader's bookkeeping never moves backwards). Returns `{ ok, updated, messageIds }` — the ids that actually changed. Publishes `message.delivery` (if anything changed) and `conversation.read` to the other participant. |
 | `POST /conversations/{id}/visibility` | auth | Body `{ hidden }` — hide/show the conversation from your own list. |
 | `POST /conversations/{id}/block` | auth | Body `{ blockedUserId, blocked }`. |
-| `POST /conversations/{id}/typing` | auth | Body `{ isTyping }`. |
-| `POST /conversations/{id}/messages/delivery` | auth | Body `{ messageIds, state: 'delivered'|'read' }`. Receipts from the author are ignored. |
-| `GET /conversations/{id}/events` | auth | SSE stream of `message.created`, `message.updated`, `message.deleted`, `typing`, `presence` and `media.viewed` events for this conversation. |
+| `POST /conversations/{id}/typing` | auth | Body `{ isTyping }`. Relayed to the other participant only (`typing { userId, isTyping, at }`); never stored. Clients throttle: one ping per 4 s while typing, a stop after 2.5 s idle. |
+| `POST /conversations/{id}/messages/delivery` | auth | Body `{ messageIds[1..100], state: 'delivered'|'read' }`. Only the *other* participant can advance a message; transitions are monotonic (`sent → delivered → read`), repeated receipts are no-ops with no write and no event. Returns `{ updated, messageIds }` listing exactly what changed. |
+| `GET /conversations/{id}/events` | auth | SSE stream of `message.created`, `message.updated`, `message.deleted`, `message.delivery`, `conversation.read`, `typing`, `presence` and `media.viewed` events for this conversation. |
 
 ## Messages
 
@@ -196,4 +196,19 @@ data: {"conversationId":"c_1","message":{…},"forUserId":"u_2"}
 ```
 
 The conversation stream is filtered per viewer server side, so one event name
-never leaks another participant's content.
+never leaks another participant's content. Events carry either `forUserId` (the
+single intended viewer) or `otherUserId` (everyone except the actor); anything
+else is delivered to both participants.
+
+| Event | Payload | Addressed to |
+| --- | --- | --- |
+| `message.created` | `{ conversationId, message, forUserId }` | each participant separately (the sender receives its own copy — reconcile by `clientMessageId`) |
+| `message.updated` / `message.deleted` | `{ conversationId, message }` / `{ conversationId, messageId }` | both |
+| `message.delivery` | `{ conversationId, messageIds, state, at, userId, otherUserId }` | the author of the messages |
+| `conversation.read` | `{ conversationId, userId, lastReadMessageAt, messageIds, at, otherUserId }` | the other participant |
+| `typing` | `{ conversationId, userId, isTyping, at, otherUserId }` | the other participant |
+
+`message.created` is published **before** the HTTP response of `POST /messages`
+is written, so a sender with an open stream sees the canonical message before
+its own request resolves. Clients must key on `clientMessageId ?? id`
+(`docs/messaging-sync.md`).

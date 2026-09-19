@@ -3,19 +3,12 @@ import {
   buildReplyPreview,
   canDeleteMessage,
   canEditMessage,
-  canMarkDelivered,
   messagePreviewFor,
-  nextDeliveryState,
   otherParticipant,
   sanitizeMessageText,
   toMessageForUser,
 } from '@mt/domain';
-import type { CallView, Cursor,
-  DeliveryState,
-  Media,
-  Message,
-  MessageForUser,
-  MessageType } from '@mt/types';
+import type { CallView, Cursor, Media, Message, MessageForUser, MessageType } from '@mt/types';
 import { newId, nowIso } from '@mt/utils';
 import type { SendMessageResponse } from '@mt/api-client';
 import { getData, type UserRecord } from '../data';
@@ -352,52 +345,6 @@ export async function listMessages(input: {
     ...page,
     items: searched.map((message) => toVisibleMessage(message, input.viewerId)),
   };
-}
-
-/** Recipient side acknowledgement: sent → delivered → read. */
-export async function markDelivered(input: {
-  actor: UserRecord;
-  conversationId: string;
-  messageIds: string[];
-  state: 'delivered' | 'read';
-}): Promise<number> {
-  const data = await getData();
-  const conversation = await requireParticipant(input.conversationId, input.actor.id);
-  const now = nowIso();
-  let updated = 0;
-
-  for (const messageId of input.messageIds) {
-    const message = await data.messages.getById(messageId);
-    if (!message || message.conversationId !== input.conversationId) continue;
-    if (!canMarkDelivered(message, input.actor.id)) continue;
-    const nextState: DeliveryState = nextDeliveryState(message.deliveryState, input.state);
-    if (nextState === message.deliveryState) continue;
-    await data.messages.update(messageId, {
-      deliveryState: nextState,
-      deliveredAt: message.deliveredAt ?? now,
-      readBy: input.state === 'read' ? Array.from(new Set([...message.readBy, input.actor.id])) : message.readBy,
-      readAt: input.state === 'read' ? now : message.readAt,
-    });
-    updated += 1;
-  }
-
-  if (updated > 0) {
-    if (input.state === 'read') {
-      await data.conversations.updateParticipant(input.conversationId, input.actor.id, {
-        lastReadAt: now,
-        lastReadMessageAt: now,
-        unreadCount: 0,
-      });
-    }
-    publish(topics.messages(input.conversationId), 'message.delivery', {
-      conversationId: input.conversationId,
-      messageIds: input.messageIds,
-      state: input.state,
-      userId: input.actor.id,
-      otherUserId: otherParticipant(conversation, input.actor.id),
-    });
-  }
-  return updated;
 }
 
 export async function getVisibleMessage(input: {

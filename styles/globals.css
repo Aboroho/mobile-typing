@@ -54,6 +54,12 @@
   body {
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
+    /*
+     * Disables the browser's own double-tap-to-zoom (and the legacy 300 ms tap
+     * delay) so the double-tap privacy gesture cannot race it. Pinch zoom and
+     * scrolling stay available.
+     */
+    touch-action: manipulation;
   }
 
   /* Password/email inputs must never feed the secret-code keystroke buffer. */

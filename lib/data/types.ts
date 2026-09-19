@@ -87,6 +87,16 @@ export interface ListMessagesParams {
   includeDeleted?: boolean;
 }
 
+export interface PendingReceiptsParams {
+  conversationId: string;
+  /** Author of the messages — the *other* participant, never the reader. */
+  senderId: string;
+  /** Inclusive read watermark: messages created at or before this instant. */
+  upTo: Timestamp;
+  /** Upper bound on the batch; older unread messages are picked up on the next call. */
+  limit: number;
+}
+
 export interface MessageRepo {
   create(message: Message): Promise<Message>;
   getById(messageId: string): Promise<Message | null>;
@@ -97,6 +107,22 @@ export interface MessageRepo {
   }): Promise<Message | null>;
   list(params: ListMessagesParams): Promise<Cursor<Message>>;
   update(messageId: string, patch: Partial<Message>): Promise<Message | null>;
+  /**
+   * Messages from `senderId` at or before `upTo` whose delivery state is still
+   * `sent` or `delivered` — the set a read watermark advances. Newest first.
+   */
+  listPendingReadReceipts(params: PendingReceiptsParams): Promise<Message[]>;
+  /**
+   * Applies a per-message patch to several messages of one conversation in as
+   * few round trips as the backend allows (a Firestore batch, a loop in memory).
+   * `patch` is called with the caller's element of `messages`, so callers may
+   * pre-compute the intended next state on that copy.
+   */
+  updateMany(
+    conversationId: string,
+    messages: readonly Message[],
+    patch: (message: Message) => Partial<Message>,
+  ): Promise<void>;
   countForConversation(conversationId: string): Promise<number>;
   countAll(): Promise<{ total: number; deleted: number; last24h: number }>;
   listForUser(userId: string, limit: number): Promise<Cursor<Message>>;

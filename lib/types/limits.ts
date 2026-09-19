@@ -57,3 +57,25 @@ export const ACCESS_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
 /** A ringing call is marked missed after this long. */
 export const CALL_RING_TIMEOUT_MS = 45 * 1000;
+
+/**
+ * Privacy lock: the chat closes and the typing game returns once the page has
+ * been *hidden* (Page Visibility API — tab switched, window minimised, screen
+ * locked, app backgrounded) for this long. Losing keyboard focus alone does not
+ * count; see `hooks/use-inactivity-lock.ts`.
+ */
+export const CHAT_HIDDEN_LOCK_MS = 60 * 1000;
+
+/**
+ * Typing indicator timing. The composer publishes "typing" at most once per
+ * `TYPING_HEARTBEAT_MS` while keys are pressed and "stopped" after
+ * `TYPING_IDLE_MS` without input; a receiver that hears nothing for
+ * `TYPING_TTL_MS` clears the indicator by itself, so a crashed or suspended
+ * sender can never leave a permanent "typing…".
+ */
+export const TYPING_IDLE_MS = 2500;
+export const TYPING_HEARTBEAT_MS = 4000;
+export const TYPING_TTL_MS = 7000;
+
+/** Receipts are batched for this long so a burst of messages costs one request. */
+export const RECEIPT_BATCH_DELAY_MS = 300;

@@ -13,3 +13,4 @@ export * from './view-once';
 export * from './media-policy';
 export * from './call-state';
 export * from './sanitize';
+export * from './message-sync';

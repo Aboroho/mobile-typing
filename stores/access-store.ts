@@ -15,9 +15,21 @@ interface AccessState {
   expiresAt: string | null;
   loading: boolean;
   error: string | null;
+  /**
+   * Incremented by every `lock()`. A `refresh()` that started before a lock
+   * must not restore `unlocked` from its (now stale) response.
+   */
+  lockVersion: number;
   startChallenge: () => Promise<AccessChallenge | null>;
   unlockWithCode: (code: string) => Promise<boolean>;
-  lock: (options?: { silent?: boolean }) => Promise<void>;
+  /**
+   * Locks immediately on the client and revokes the server session.
+   * `force` revokes the server session even when this tab already believes
+   * it is locked — used when a stored "hidden since" stamp says the session
+   * should have ended while the page was away. `before` runs (best effort)
+   * while the session is still valid, e.g. to end an active call.
+   */
+  lock: (options?: { silent?: boolean; force?: boolean; before?: () => Promise<void> }) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -37,6 +49,7 @@ export const useAccessStore = create<AccessState>((set, get) => ({
   expiresAt: null,
   loading: false,
   error: null,
+  lockVersion: 0,
 
   async startChallenge() {
     set({ loading: true, error: null });
@@ -89,20 +102,44 @@ export const useAccessStore = create<AccessState>((set, get) => ({
 
   async lock(options) {
     const wasUnlocked = get().unlocked;
-    set({ unlocked: false, boundUserId: null, epoch: null, expiresAt: null, challenge: null });
-    if (!wasUnlocked) return;
+    // Client state first and synchronously: the chat unmounts in this tick,
+    // before any network round trip.
+    set((state) => ({
+      unlocked: false,
+      boundUserId: null,
+      epoch: null,
+      expiresAt: null,
+      challenge: null,
+      lockVersion: state.lockVersion + 1,
+    }));
+    if (!wasUnlocked && !options?.force) return;
+    if (options?.before) {
+      // Work that still needs the session (ending a call) goes first, bounded
+      // so a stuck request can never delay the revoke for long.
+      await Promise.race([
+        options.before().catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    }
     try {
       await api.access.lock();
     } catch {
       // The server session will expire on its own; the UI is already locked.
     }
-    if (!options?.silent)
+    if (!options?.silent && wasUnlocked)
       useUiStore.getState().pushToast('Locked. Type the sequence again to continue.');
   },
 
   async refresh() {
+    const version = get().lockVersion;
     try {
       const { status, unlocked, session } = await api.access.status();
+      if (get().lockVersion !== version) {
+        // Locked while the request was in flight: the answer describes a
+        // session that has just been revoked. Keep the challenge metadata only.
+        set({ status, epoch: status.epoch });
+        return;
+      }
       // Restores the unlocked UI after a reload: the httpOnly cookie is the
       // source of truth and the server told us whether it is still valid.
       set({
