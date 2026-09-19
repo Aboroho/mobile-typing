@@ -248,13 +248,27 @@ if (missingClient.length) {
   ok('Firebase web config complete', `all ${CLIENT_KEYS.length + 1} values set`);
 }
 
+const emulatorHost = valueOf('FIREBASE_AUTH_EMULATOR_HOST') || valueOf('NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST');
+const usingEmulator = emulatorHost.trim().length > 0;
 const missingAdmin = ADMIN_KEYS.filter(isBlank);
-if (missingAdmin.length) {
+if (usingEmulator) {
+  ok('Firebase Auth emulator', `enabled via ${emulatorHost} — Admin SDK will talk to the emulator`);
+  if (missingAdmin.length) {
+    warn(
+      'Firebase Admin credentials are not set, but the emulator is enabled',
+      `unset: ${missingAdmin.join(', ')} — continuing because the emulator does not need them`,
+      'To use production Firebase, unset FIREBASE_AUTH_EMULATOR_HOST / NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST and fill the three FIREBASE_* keys.',
+    );
+  } else {
+    ok('Firebase Admin credentials present', `service account ${valueOf('FIREBASE_CLIENT_EMAIL')}`);
+  }
+} else if (missingAdmin.length) {
   fail(
     'Firebase Admin credentials incomplete',
     `unset: ${missingAdmin.join(', ')}`,
     'Firebase console → Project settings → Service accounts → Generate new private key. ' +
-      'FIREBASE_PRIVATE_KEY goes on one line with its newlines escaped as \\n, inside double quotes.',
+      'FIREBASE_PRIVATE_KEY goes on one line with its newlines escaped as \\n, inside double quotes. ' +
+      'For local development without a project, set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 and NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 and run npm run emulator.',
   );
 } else {
   ok('Firebase Admin credentials present', `service account ${valueOf('FIREBASE_CLIENT_EMAIL')}`);
@@ -290,21 +304,29 @@ if (clientEmail && !clientEmail.includes('@')) {
 // --- Admin SDK -------------------------------------------------------------
 
 let app = null;
-if (!missingAdmin.length) {
+if (!missingAdmin.length || usingEmulator) {
   try {
     const { cert, initializeApp } = await import('firebase-admin/app');
-    app = initializeApp(
-      {
-        credential: cert({
+    const projectId = valueOf('FIREBASE_PROJECT_ID') || 'demo-project';
+    if (usingEmulator && missingAdmin.length) {
+      // Emulator does not need a real service account; initialise with projectId only.
+      if (!process.env.FIREBASE_AUTH_EMULATOR_HOST) process.env.FIREBASE_AUTH_EMULATOR_HOST = emulatorHost;
+      app = initializeApp({ projectId }, 'keypad-doctor');
+      ok('Firebase Admin SDK initialised (emulator)', `project ${projectId} via ${emulatorHost}`);
+    } else {
+      app = initializeApp(
+        {
+          credential: cert({
+            projectId: valueOf('FIREBASE_PROJECT_ID'),
+            clientEmail,
+            privateKey,
+          }),
           projectId: valueOf('FIREBASE_PROJECT_ID'),
-          clientEmail,
-          privateKey,
-        }),
-        projectId: valueOf('FIREBASE_PROJECT_ID'),
-      },
-      'keypad-doctor',
-    );
-    ok('Firebase Admin SDK initialised', `project ${valueOf('FIREBASE_PROJECT_ID')}`);
+        },
+        'keypad-doctor',
+      );
+      ok('Firebase Admin SDK initialised', `project ${valueOf('FIREBASE_PROJECT_ID')}`);
+    }
   } catch (error) {
     app = null;
     fail(
@@ -357,7 +379,13 @@ function explain(error) {
 // Google the three probes below would each burn their full timeout. Ask once,
 // quickly, and skip them with a single explanation instead.
 let reachable = false;
-if (app) {
+if (usingEmulator) {
+  warn(
+    'using Firebase Auth emulator',
+    `probes that contact production (Firestore, Storage, Auth sign-up) are skipped while the emulator is enabled`,
+    'Start the emulator with npm run emulator and test signup through the UI, or unset the emulator hosts to probe production.',
+  );
+} else if (app) {
   try {
     const response = await fetch('https://www.googleapis.com/', { signal: AbortSignal.timeout(8000) });
     reachable = response.status < 500;

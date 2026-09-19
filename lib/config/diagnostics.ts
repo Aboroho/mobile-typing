@@ -1,7 +1,7 @@
 import { parsePublicEnv, hasFirebaseClientConfig, type PublicEnv } from './public-env';
 import { hasFirebaseAdminCredentials, isProduction, parseServerEnv, type ServerEnv } from './server-env';
 
-export type ConfigIssueLevel = 'error' | 'warn';
+export type ConfigIssueLevel = 'error' | 'warn' | 'info';
 
 /**
  * A configuration problem that does not stop the process from booting but will
@@ -67,16 +67,47 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
   //    reaches the API and every sign-up / sign-in is rejected with
   //    UNAUTHENTICATED. This is the single most confusing misconfiguration, and
   //    it is now unconditional — there is no provider switch to fall back on.
+  //    When the Auth emulator is configured the same five keys must still be set
+  //    (they can be any non-empty values; the emulator does not validate them).
+  const emulatorHost =
+    (publicEnv as unknown as Record<string, unknown>).NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST ??
+    (server as unknown as Record<string, unknown>).FIREBASE_AUTH_EMULATOR_HOST ??
+    (server as unknown as Record<string, unknown>).NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;
+  const usingEmulator =
+    typeof emulatorHost === 'string' && String(emulatorHost).trim().length > 0;
+
   if (!hasFirebaseClientConfig(publicEnv)) {
+    if (usingEmulator) {
+      issues.push({
+        level: 'warn',
+        reason: 'firebase_auth_emulator_without_client_config',
+        message:
+          'FIREBASE_AUTH_EMULATOR_HOST is set but the Firebase web configuration is still incomplete. ' +
+          'When using the Auth emulator NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, ' +
+          'NEXT_PUBLIC_FIREBASE_PROJECT_ID, NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID and ' +
+          'NEXT_PUBLIC_FIREBASE_APP_ID must all be set — they can be any values (e.g. demo-*), but empty ' +
+          'values still count as unset. Fill them in .env.local or unset the emulator host.',
+      });
+    } else {
+      issues.push({
+        level: 'error',
+        reason: 'firebase_auth_without_client_config',
+        message:
+          'Firebase Authentication is not configured. Set NEXT_PUBLIC_FIREBASE_API_KEY, ' +
+          'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
+          'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID and NEXT_PUBLIC_FIREBASE_APP_ID ' +
+          '(Firebase console → Project settings → Your apps → SDK setup and configuration), ' +
+          'then restart the dev server so the browser bundle picks the values up. ' +
+          'Until then registration and login fail with UNAUTHENTICATED ("complete the Firebase sign-up first"). ' +
+          'For local development without a Firebase project, set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 ' +
+          'and NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 and run the Auth emulator (npm run emulator).',
+      });
+    }
+  } else if (usingEmulator) {
     issues.push({
-      level: 'error',
-      reason: 'firebase_auth_without_client_config',
-      message:
-        'The Firebase web configuration is missing, so the browser cannot authenticate anybody. ' +
-        'NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
-        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID and NEXT_PUBLIC_FIREBASE_APP_ID must all be set (blank values ' +
-        'count as unset); until then registration and login fail with UNAUTHENTICATED ("complete the Firebase ' +
-        'sign-up first"). Copy them from Firebase console → Project settings → Your apps → SDK setup and configuration.',
+      level: 'info',
+      reason: 'firebase_auth_using_emulator',
+      message: `Firebase Auth emulator is enabled via ${emulatorHost}. The client and Admin SDKs will talk to the local emulator instead of production. Do not use this in production.`,
     });
   }
 
@@ -100,7 +131,9 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
 
   // 3. Verifying a Firebase credential needs the Admin SDK, so the service
   //    account is required by every deployment; data and storage add to that.
-  if (!hasFirebaseAdminCredentials(server)) {
+  //    When the Auth emulator is in use the Admin SDK can run without real
+  //    service-account credentials (it talks to the local emulator).
+  if (!hasFirebaseAdminCredentials(server) && !usingEmulator) {
     const selected = [
       'Firebase Authentication',
       server.DATA_PROVIDER === 'firestore' ? 'DATA_PROVIDER=firestore' : null,
@@ -116,7 +149,8 @@ export function collectConfigIssues(server: ServerEnv, publicEnv: PublicEnv): Co
         'FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must all be set (blank ' +
         'values count as unset); until then no ID token or session cookie can be verified and these requests ' +
         'fail with a 500. Add the service account key from Project settings → Service accounts → Generate new ' +
-        'private key, with newlines escaped as \\n on a single line.',
+        'private key, with newlines escaped as \\n on a single line. For local development without a project, ' +
+        'set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 and NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 instead.',
     });
   }
 

@@ -17,12 +17,37 @@ let cachedDb: Firestore | null = null;
  */
 export function getAdminApp(): App {
   if (cachedApp) return cachedApp;
-  const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = env();
+  const {
+    FIREBASE_PROJECT_ID,
+    FIREBASE_CLIENT_EMAIL,
+    FIREBASE_PRIVATE_KEY,
+    FIREBASE_AUTH_EMULATOR_HOST,
+    NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST,
+  } = env() as unknown as Record<string, string | undefined>;
+  const emulatorHost = FIREBASE_AUTH_EMULATOR_HOST ?? NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;
+  const usingEmulator = typeof emulatorHost === 'string' && emulatorHost.trim().length > 0;
   if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+    if (usingEmulator) {
+      // For the emulator we can initialise with dummy credentials; the SDK will
+      // route Auth calls to the emulator instead of attempting a real JWT grant.
+      const projectId = FIREBASE_PROJECT_ID ?? 'demo-project';
+      if (!process.env.FIREBASE_AUTH_EMULATOR_HOST && emulatorHost) {
+        process.env.FIREBASE_AUTH_EMULATOR_HOST = emulatorHost;
+      }
+      cachedApp =
+        getApps().find((app) => app.name === 'mt') ??
+        initializeApp({ projectId }, 'mt');
+      logger.debug('firebase.admin.initialised.emulator', { projectId, emulatorHost });
+      return cachedApp;
+    }
     throw new Error(
       'Firebase Admin credentials are missing. Set FIREBASE_PROJECT_ID, ' +
-        'FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY, or use the memory providers for local development.',
+        'FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY, or set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 ' +
+        'for local development with the Auth emulator.',
     );
+  }
+  if (emulatorHost && !process.env.FIREBASE_AUTH_EMULATOR_HOST) {
+    process.env.FIREBASE_AUTH_EMULATOR_HOST = emulatorHost;
   }
   cachedApp =
     getApps().find((app) => app.name === 'mt') ??
@@ -37,7 +62,7 @@ export function getAdminApp(): App {
       },
       'mt',
     );
-  logger.debug('firebase.admin.initialised', { projectId: FIREBASE_PROJECT_ID });
+  logger.debug('firebase.admin.initialised', { projectId: FIREBASE_PROJECT_ID, emulatorHost: emulatorHost ?? null });
   return cachedApp;
 }
 

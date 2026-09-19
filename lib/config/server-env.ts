@@ -33,6 +33,9 @@ export const serverEnvSchema = z.object({
   FIREBASE_CLIENT_EMAIL: optionalNonEmpty,
   /** Newlines in the private key arrive escaped from most hosting dashboards. */
   FIREBASE_PRIVATE_KEY: optionalNonEmpty,
+  /** When set, the Admin SDK talks to the local Auth emulator instead of prod. */
+  FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
+  NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
 
   ADMIN_UID: optionalNonEmpty,
   /** Development convenience, resolved server side. Never sent to the client. */
