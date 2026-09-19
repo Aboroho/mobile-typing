@@ -29,10 +29,11 @@ function buildCsp(nonce: string): string {
     // scripts they themselves inject, without falling back to 'unsafe-inline'.
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
-    "media-src 'self' blob: mediastream:",
+    "img-src 'self' data: blob: https://*.googleapis.com https://*.firebasestorage.app",
+    "media-src 'self' blob: mediastream: https://*.googleapis.com https://*.firebasestorage.app",
     "font-src 'self' data:",
-    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com wss://*.googleapis.com",
+    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://*.firebasestorage.app wss://*.firebaseio.com wss://*.googleapis.com",
+    "frame-src 'self' https://*.firebaseapp.com",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -61,14 +62,18 @@ export function proxy(request: NextRequest) {
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('Referrer-Policy', 'no-referrer');
-  response.headers.set('Permissions-Policy', 'camera=(), geolocation=(), interest-cohort=(), microphone=(self)');
+  response.headers.set(
+    'Permissions-Policy',
+    'camera=(), geolocation=(), interest-cohort=(), microphone=(self)',
+  );
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
 
   const cspMode = process.env.CSP_MODE ?? 'enforce';
   if (cspMode === 'off') return response;
 
   const csp = buildCsp(nonce);
-  const headerName = cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
+  const headerName =
+    cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
   response.headers.set(headerName, csp);
 
   return response;

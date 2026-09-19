@@ -40,8 +40,35 @@ export const publicEnvSchema = z.object({
 
 export type PublicEnv = z.infer<typeof publicEnvSchema>;
 
-export function parsePublicEnv(env: NodeJS.ProcessEnv = process.env): PublicEnv {
-  const parsed = publicEnvSchema.safeParse(env);
+/**
+ * Explicit dictionary of public environment variables.
+ * In Next.js (Webpack / Turbopack), `process.env` is NOT a complete dictionary on the client.
+ * Bundlers only inline properties that are statically referenced as `process.env.NEXT_PUBLIC_*`.
+ */
+function getRawPublicEnv(): Record<string, string | undefined> {
+  return {
+    NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
+    NEXT_PUBLIC_STUN_URLS: process.env.NEXT_PUBLIC_STUN_URLS,
+    NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
+    NEXT_PUBLIC_ENABLE_TYPING_GAME: process.env.NEXT_PUBLIC_ENABLE_TYPING_GAME,
+    NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST,
+  };
+}
+
+export function parsePublicEnv(env?: NodeJS.ProcessEnv | Record<string, unknown>): PublicEnv {
+  // When running in the browser, process.env is not a populated dictionary; Next.js only inlines
+  // statically referenced process.env.NEXT_PUBLIC_* properties. If env is omitted or is process.env,
+  // we build an object with explicit static property accesses so bundlers inline them.
+  const isDefaultEnv = env === undefined || (typeof process !== 'undefined' && env === process.env);
+  const source = isDefaultEnv ? getRawPublicEnv() : env;
+  const parsed = publicEnvSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
     throw new Error(`Invalid NEXT_PUBLIC_* environment: ${issues}`);

@@ -13,13 +13,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetAuthClient, getAuthClient, firebaseAuthMessage } from '@/lib/client/auth-client';
 import { useAuthStore } from '@/stores/auth-store';
-import {
-  fakeFirebaseClientAuth,
-  resetFirebaseClientAuth,
-} from '../helpers/firebase-client';
+import { useAccessStore } from '@/stores/access-store';
+import { fakeFirebaseClientAuth, resetFirebaseClientAuth } from '../helpers/firebase-client';
 
 vi.mock('firebase/app', async () => (await import('../helpers/firebase-client')).firebaseAppModule);
-vi.mock('firebase/auth', async () => (await import('../helpers/firebase-client')).firebaseAuthModule);
+vi.mock(
+  'firebase/auth',
+  async () => (await import('../helpers/firebase-client')).firebaseAuthModule,
+);
 
 interface Profile {
   id: string;
@@ -54,7 +55,9 @@ function installApiStub() {
     });
 
   const uidFrom = (authorization: string | null) =>
-    authorization?.startsWith('Bearer id-token-') ? authorization.slice('Bearer id-token-'.length) : null;
+    authorization?.startsWith('Bearer id-token-')
+      ? authorization.slice('Bearer id-token-'.length)
+      : null;
 
   const profileFor = (uid: string, name: string, email: string): Profile => {
     const existing = profiles.get(uid);
@@ -97,7 +100,11 @@ function installApiStub() {
             error: { code: 'UNAUTHENTICATED', message: 'complete the Firebase sign-up first' },
           });
         }
-        const profile = profileFor(uid, String(body['name'] ?? 'User'), email || `${uid}@example.com`);
+        const profile = profileFor(
+          uid,
+          String(body['name'] ?? 'User'),
+          email || `${uid}@example.com`,
+        );
         return respond(201, {
           ok: true,
           data: { user: profile, token: null, cookieSession: true, accessGranted: true },
@@ -118,9 +125,15 @@ function installApiStub() {
       }
       if (url.pathname === '/api/v1/auth/reauthenticate') {
         if (!uid) {
-          return respond(401, { ok: false, error: { code: 'UNAUTHENTICATED', message: 'sign in again' } });
+          return respond(401, {
+            ok: false,
+            error: { code: 'UNAUTHENTICATED', message: 'sign in again' },
+          });
         }
-        return respond(200, { ok: true, data: { user: profiles.get(uid) ?? null, accessGranted: true } });
+        return respond(200, {
+          ok: true,
+          data: { user: profiles.get(uid) ?? null, accessGranted: true },
+        });
       }
       if (url.pathname === '/api/v1/auth/logout') {
         return respond(200, { ok: true, data: { loggedOut: true } });
@@ -149,6 +162,7 @@ beforeEach(() => {
   resetFirebaseClientAuth();
   resetAuthClient();
   api = installApiStub();
+  useAccessStore.setState({ unlocked: false, boundUserId: null });
   useAuthStore.setState({ user: null, initializing: true, error: null });
 });
 
@@ -185,7 +199,9 @@ describe('registration in the browser', () => {
     expect(Object.keys(register?.body ?? {})).not.toContain('password');
     expect(Object.keys(register?.body ?? {})).not.toContain('confirmPassword');
     // The password went to Firebase only.
-    expect(api.requests.filter((request) => JSON.stringify(request.body).includes('CorrectHorse1!'))).toEqual([]);
+    expect(
+      api.requests.filter((request) => JSON.stringify(request.body).includes('CorrectHorse1!')),
+    ).toEqual([]);
   });
 
   it('reports a duplicate email without saying which side refused it', async () => {
@@ -199,7 +215,9 @@ describe('registration in the browser', () => {
     expect(second.ok).toBe(false);
     expect(useAuthStore.getState().error).toBe('that email address already has an account');
     // The refusal came from Firebase, so no profile request was made for it.
-    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(1);
+    expect(api.requests.filter((request) => request.path === '/api/v1/auth/register')).toHaveLength(
+      1,
+    );
   });
 
   it('reuses the signed-in Firebase account when a profile request is retried', async () => {
@@ -313,7 +331,10 @@ describe('session persistence and recovery', () => {
     // Recovery went through registration, with the display name Firebase holds.
     const recovery = api.requests.filter((request) => request.path === '/api/v1/auth/register');
     expect(recovery.length).toBeGreaterThan(0);
-    expect(recovery[recovery.length - 1]?.body).toMatchObject({ name: 'Alice', email: 'alice@example.com' });
+    expect(recovery[recovery.length - 1]?.body).toMatchObject({
+      name: 'Alice',
+      email: 'alice@example.com',
+    });
   });
 
   it('stays signed out when Firebase has nobody', async () => {

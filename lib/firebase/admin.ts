@@ -34,9 +34,7 @@ export function getAdminApp(): App {
       if (!process.env.FIREBASE_AUTH_EMULATOR_HOST && emulatorHost) {
         process.env.FIREBASE_AUTH_EMULATOR_HOST = emulatorHost;
       }
-      cachedApp =
-        getApps().find((app) => app.name === 'mt') ??
-        initializeApp({ projectId }, 'mt');
+      cachedApp = getApps().find((app) => app.name === 'mt') ?? initializeApp({ projectId }, 'mt');
       logger.debug('firebase.admin.initialised.emulator', { projectId, emulatorHost });
       return cachedApp;
     }
@@ -62,7 +60,10 @@ export function getAdminApp(): App {
       },
       'mt',
     );
-  logger.debug('firebase.admin.initialised', { projectId: FIREBASE_PROJECT_ID, emulatorHost: emulatorHost ?? null });
+  logger.debug('firebase.admin.initialised', {
+    projectId: FIREBASE_PROJECT_ID,
+    emulatorHost: emulatorHost ?? null,
+  });
   return cachedApp;
 }
 
@@ -95,7 +96,8 @@ export function resolveStorageBucketName(
 export function getStorageBucket() {
   const { FIREBASE_PROJECT_ID } = env();
   const name = resolveStorageBucketName(FIREBASE_PROJECT_ID, publicStorageBucket());
-  return name ? getStorage().bucket(name) : getStorage().bucket();
+  const storage = getStorage(getAdminApp());
+  return name ? storage.bucket(name) : storage.bucket();
 }
 
 /**

@@ -4,7 +4,7 @@ import type { SessionUser } from '@mt/api-client';
 import type { LoginFormValues, RegisterFormValues } from '@mt/validation';
 import { api, setAuthTokenProvider } from '@/lib/client/api';
 import { firebaseAuthMessage, getAuthClient, type AuthClientUser } from '@/lib/client/auth-client';
-import { errorMessage } from './access-store';
+import { errorMessage, useAccessStore } from './access-store';
 
 interface AuthActionResult {
   ok: boolean;
@@ -120,6 +120,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await client.signUp({ email, password, name });
       const result = await api.auth.register({ name, email });
       set({ user: result.user, error: null });
+      if (result.accessGranted) {
+        useAccessStore.setState({ boundUserId: result.user.id });
+      }
       return { ok: true, accessGranted: result.accessGranted };
     } catch (error) {
       set({ error: authErrorMessage(error) });
@@ -134,6 +137,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await client.signIn({ email, password });
       const result = await api.auth.login({ email });
       set({ user: result.user, error: null });
+      if (result.accessGranted) {
+        useAccessStore.setState({ boundUserId: result.user.id });
+      }
       return { ok: true, accessGranted: result.accessGranted };
     } catch (error) {
       set({ error: authErrorMessage(error) });
@@ -150,6 +156,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await client.reauthenticate(password);
       const result = await api.auth.reauthenticate();
       set({ user: result.user, error: null });
+      if (result.accessGranted) {
+        useAccessStore.setState({ boundUserId: result.user.id });
+      }
       return { ok: true, accessGranted: result.accessGranted };
     } catch (error) {
       set({ error: authErrorMessage(error) });
@@ -167,6 +176,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       // Nothing to sign out of locally; the server session is already gone.
     }
+    useAccessStore.setState({ boundUserId: null });
     set({ user: null, error: null });
   },
 

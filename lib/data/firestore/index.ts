@@ -1,4 +1,10 @@
-import type { DocumentData, Firestore, Query, QueryDocumentSnapshot, Transaction } from 'firebase-admin/firestore';
+import type {
+  DocumentData,
+  Firestore,
+  Query,
+  QueryDocumentSnapshot,
+  Transaction,
+} from 'firebase-admin/firestore';
 import {
   ViewOnceState,
   type AdminUserRow,
@@ -93,7 +99,10 @@ async function paginateQuery<T>(
   sortField: string,
 ): Promise<Cursor<T>> {
   const cursor = decodeCursor(options.cursor);
-  let scoped = query.orderBy(sortField, 'desc').orderBy('__name__', 'desc').limit(options.limit + 1);
+  let scoped = query
+    .orderBy(sortField, 'desc')
+    .orderBy('__name__', 'desc')
+    .limit(options.limit + 1);
   if (cursor) {
     scoped = scoped.startAfter(cursor.sortKey, cursor.id);
   }
@@ -106,9 +115,7 @@ async function paginateQuery<T>(
     items: page.map(map),
     hasMore,
     nextCursor:
-      hasMore && last
-        ? encodeCursor(String(last.data()[sortField] ?? ''), last.id)
-        : null,
+      hasMore && last ? encodeCursor(String(last.data()[sortField] ?? ''), last.id) : null,
   };
 }
 
@@ -118,8 +125,14 @@ class FirestoreUsers implements UserRepo {
   }
 
   async create(record: UserRecord): Promise<UserRecord> {
+    const emailLower = record.email.trim().toLowerCase();
+    const searchKey = (record.name || record.email).trim().toLowerCase();
     await this.col.doc(record.id).set(
-      stripUndefined({ ...record, emailLower: record.email.trim().toLowerCase() } as unknown as DocumentData),
+      stripUndefined({
+        ...record,
+        emailLower,
+        searchKey,
+      } as unknown as DocumentData),
     );
     return record;
   }
@@ -137,9 +150,14 @@ class FirestoreUsers implements UserRepo {
   }
 
   async update(userId: string, patch: Partial<UserRecord>): Promise<UserRecord | null> {
-    await this.col.doc(userId).set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), {
-      merge: true,
-    });
+    const extra: Record<string, unknown> = {};
+    if (patch.name) extra.searchKey = patch.name.trim().toLowerCase();
+    if (patch.email) extra.emailLower = patch.email.trim().toLowerCase();
+    await this.col
+      .doc(userId)
+      .set(stripUndefined({ ...patch, ...extra, updatedAt: nowIso() } as unknown as DocumentData), {
+        merge: true,
+      });
     return this.getById(userId);
   }
 
@@ -152,8 +170,18 @@ class FirestoreUsers implements UserRepo {
       const term = params.q.trim().toLowerCase();
       query = query.where('searchKey', '>=', term).where('searchKey', '<=', `${term}\uf8ff`);
     }
-    const page = await paginateQuery(query, params, (doc) => toUserRecord(doc.id, doc.data()), 'createdAt');
-    return { ...page, items: page.items.map((user): AdminUserRow => ({ ...user, conversationCount: 0, messageCount: 0 })) };
+    const page = await paginateQuery(
+      query,
+      params,
+      (doc) => toUserRecord(doc.id, doc.data()),
+      'createdAt',
+    );
+    return {
+      ...page,
+      items: page.items.map(
+        (user): AdminUserRow => ({ ...user, conversationCount: 0, messageCount: 0 }),
+      ),
+    };
   }
 
   async search(q: string, limit: number): Promise<PublicUserSummary[]> {
@@ -167,7 +195,12 @@ class FirestoreUsers implements UserRepo {
       .get();
     return snapshot.docs.map((doc) => {
       const user = toUserRecord(doc.id, doc.data());
-      return { id: user.id, name: user.name, photoUrl: user.photoUrl, presence: 'offline' as const };
+      return {
+        id: user.id,
+        name: user.name,
+        photoUrl: user.photoUrl,
+        presence: 'offline' as const,
+      };
     });
   }
 
@@ -207,7 +240,10 @@ class FirestoreConversations implements ConversationRepo {
 
   async create(conversation: Conversation): Promise<Conversation> {
     const batch = db().batch();
-    batch.set(this.col.doc(conversation.id), stripUndefined(conversation as unknown as DocumentData));
+    batch.set(
+      this.col.doc(conversation.id),
+      stripUndefined(conversation as unknown as DocumentData),
+    );
     for (const participantId of conversation.participantIds) {
       batch.set(
         db()
@@ -228,7 +264,9 @@ class FirestoreConversations implements ConversationRepo {
   }
 
   async update(conversationId: string, patch: Partial<Conversation>): Promise<Conversation | null> {
-    await this.col.doc(conversationId).set(stripUndefined(patch as unknown as DocumentData), { merge: true });
+    await this.col
+      .doc(conversationId)
+      .set(stripUndefined(patch as unknown as DocumentData), { merge: true });
     const updated = await this.getById(conversationId);
     if (updated && patch.lastActivityAt) {
       const batch = db().batch();
@@ -255,7 +293,10 @@ class FirestoreConversations implements ConversationRepo {
   ): Promise<Conversation | null> {
     await this.col
       .doc(conversationId)
-      .set({ [`participants.${userId}`]: stripUndefined(patch as unknown as DocumentData) }, { merge: true });
+      .set(
+        { [`participants.${userId}`]: stripUndefined(patch as unknown as DocumentData) },
+        { merge: true },
+      );
     if (patch.hidden !== undefined) {
       await db()
         .collection(COLLECTIONS.userConversations)
@@ -276,19 +317,21 @@ class FirestoreConversations implements ConversationRepo {
       .collection(COLLECTIONS.userConversations)
       .doc(params.userId)
       .collection('items');
-    const query: Query<DocumentData> = params.includeHidden ? items : items.where('hidden', '==', false);
+    const query: Query<DocumentData> = params.includeHidden
+      ? items
+      : items.where('hidden', '==', false);
     const cursor = decodeCursor(params.cursor);
     let scoped = query.orderBy('lastActivityAt', 'desc').limit(params.limit + 1);
     if (cursor) scoped = scoped.startAfter(cursor.sortKey, cursor.id);
     const snapshot = await scoped.get();
     const hasMore = snapshot.docs.length > params.limit;
     const page = hasMore ? snapshot.docs.slice(0, params.limit) : snapshot.docs;
-    const conversations = await Promise.all(
-      page.map((doc) => this.getById(doc.id)),
-    );
+    const conversations = await Promise.all(page.map((doc) => this.getById(doc.id)));
     const last = page[page.length - 1];
     return {
-      items: conversations.filter((conversation): conversation is Conversation => Boolean(conversation)),
+      items: conversations.filter((conversation): conversation is Conversation =>
+        Boolean(conversation),
+      ),
       hasMore,
       nextCursor:
         hasMore && last ? encodeCursor(String(last.data()['lastActivityAt'] ?? ''), last.id) : null,
@@ -303,7 +346,10 @@ class FirestoreConversations implements ConversationRepo {
 
 class FirestoreMessages implements MessageRepo {
   private messagesOf(conversationId: string) {
-    return db().collection(COLLECTIONS.conversations).doc(conversationId).collection(COLLECTIONS.messages);
+    return db()
+      .collection(COLLECTIONS.conversations)
+      .doc(conversationId)
+      .collection(COLLECTIONS.messages);
   }
 
   async create(message: Message): Promise<Message> {
@@ -366,7 +412,9 @@ class FirestoreMessages implements MessageRepo {
     if (!existing) return null;
     await this.messagesOf(existing.conversationId)
       .doc(messageId)
-      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), { merge: true });
+      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), {
+        merge: true,
+      });
     return this.getById(messageId);
   }
 
@@ -426,7 +474,9 @@ class FirestoreMedia implements MediaRepo {
   async update(mediaId: string, patch: Partial<Media>): Promise<Media | null> {
     await this.col
       .doc(mediaId)
-      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), { merge: true });
+      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), {
+        merge: true,
+      });
     return this.getById(mediaId);
   }
 
@@ -456,20 +506,31 @@ class FirestoreMedia implements MediaRepo {
       const claimable =
         !media.deleted &&
         media.ownerId !== viewerId &&
-        (media.viewOnceState === ViewOnceState.Delivered || media.viewOnceState === ViewOnceState.Viewable);
+        (media.viewOnceState === ViewOnceState.Delivered ||
+          media.viewOnceState === ViewOnceState.Viewable);
       if (!claimable) return { media, claimed: false };
-      const updated: Media = { ...media, viewOnceState: ViewOnceState.Viewing, updatedAt: nowIso() };
-      transaction.set(ref, { viewOnceState: ViewOnceState.Viewing, updatedAt: nowIso() }, { merge: true });
+      const updated: Media = {
+        ...media,
+        viewOnceState: ViewOnceState.Viewing,
+        updatedAt: nowIso(),
+      };
+      transaction.set(
+        ref,
+        { viewOnceState: ViewOnceState.Viewing, updatedAt: nowIso() },
+        { merge: true },
+      );
       return { media: updated, claimed: true };
     });
   }
 
   async markViewed(mediaId: string, viewerId: string): Promise<Media | null> {
     const now = nowIso();
-    await this.col.doc(mediaId).set(
-      { viewOnceState: ViewOnceState.Viewed, viewedAt: now, viewedBy: viewerId, updatedAt: now },
-      { merge: true },
-    );
+    await this.col
+      .doc(mediaId)
+      .set(
+        { viewOnceState: ViewOnceState.Viewed, viewedAt: now, viewedBy: viewerId, updatedAt: now },
+        { merge: true },
+      );
     return this.getById(mediaId);
   }
 
@@ -505,7 +566,9 @@ class FirestoreCalls implements CallRepo {
   async update(callId: string, patch: Partial<Call>): Promise<Call | null> {
     await this.col
       .doc(callId)
-      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), { merge: true });
+      .set(stripUndefined({ ...patch, updatedAt: nowIso() } as unknown as DocumentData), {
+        merge: true,
+      });
     return this.getById(callId);
   }
 
