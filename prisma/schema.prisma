@@ -1,0 +1,386 @@
+// Prisma schema for Keypad (mobile-typing)
+// PostgreSQL target. Run `npx prisma migrate dev` to apply.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id              String   @id @default(cuid())
+  name            String
+  email           String   @unique
+  emailNormalized String   @unique
+  passwordHash    String
+  photoUrl        String?
+  status          String   @default("active") // active | disabled
+  disabledReason  String?
+  lastLoginAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sessions           UserSession[]
+  sentMessages       Message[]      @relation("MessageSender")
+  mediaOwned         MediaObject[]  @relation("MediaOwner")
+  callsInitiated     Call[]         @relation("CallInitiator")
+  callsReceived      Call[]         @relation("CallRecipient")
+  callParticipants   CallParticipant[]
+  conversationMembers ConversationMember[]
+  receipts           MessageReceipt[]
+  editsMade          MessageEdit[]  @relation("EditActor")
+  auditLogs          AuditLog[]     @relation("AuditActor")
+  adminLogs          AdminAccessLog[] @relation("AdminActor")
+  typingSessions     TypingSession[]
+  presence           UserPresence?
+  mediaViewedBy      MediaObject[]  @relation("MediaViewer")
+  outboxCreated      OutboxEvent[]  @relation("OutboxCreator")
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Conversations
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id              String   @id @default(cuid())
+  participantKey  String   @unique // sorted "a|b" key for 1:1 lookup
+  participantIds  String[] // exactly 2 user ids
+  lastMessageText String?
+  lastMessageAt   DateTime?
+  lastActivityAt  DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members    ConversationMember[]
+  messages   Message[]
+  media      MediaObject[]
+  calls      Call[]
+  typing     TypingSession[]
+
+  @@index([lastActivityAt])
+}
+
+model ConversationMember {
+  id               String   @id @default(cuid())
+  conversationId   String
+  userId           String
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt       DateTime?
+  lastReadMessageId String?
+  unreadCount      Int      @default(0)
+  hidden           Boolean  @default(false)
+  hiddenAt         DateTime?
+  blockedUserIds   String[] @default([])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+model Message {
+  id               String   @id @default(cuid())
+  conversationId   String
+  senderId         String
+  clientMessageId  String
+  kind             String   // text | image | voice | system
+  text             String?
+  // JSON encoded metadata (e.g. replyTo, dimensions, durationSeconds)
+  metadata         Json?
+  edited           Boolean  @default(false)
+  deleted          Boolean  @default(false)
+  deletedAt        DateTime?
+  deletedBy        String?
+  expiresAt        DateTime? // for future ephemeral messages
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender           User         @relation("MessageSender", fields: [senderId], references: [id])
+  edits            MessageEdit[]
+  media            MessageMedia[]
+  receipts         MessageReceipt[]
+
+  @@unique([conversationId, senderId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([conversationId, deleted])
+}
+
+model MessageEdit {
+  id          String   @id @default(cuid())
+  messageId   String
+  actorId     String
+  previousText String
+  newText     String
+  createdAt   DateTime @default(now())
+
+  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  actor       User    @relation("EditActor", fields: [actorId], references: [id])
+
+  @@index([messageId, createdAt])
+}
+
+model MessageReceipt {
+  id          String   @id @default(cuid())
+  messageId   String
+  userId      String
+  status      String   // delivered | read
+  deliveredAt DateTime?
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, status])
+  @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+
+model MediaObject {
+  id              String   @id @default(cuid())
+  ownerId         String
+  conversationId  String
+  messageId       String?
+  objectKey       String   @unique // random non-guessable key in bucket
+  bucket          String
+  provider        String   @default("s3") // s3 | local | memory
+  kind            String   // image | voice
+  mimeType        String
+  sizeBytes       Int
+  sha256          String?
+  // upload state: pending | uploading | ready | failed
+  uploadState     String   @default("pending")
+  viewOnce        Boolean  @default(false)
+  // view-once lifecycle: sent | delivered | viewable | viewing | viewed | expired
+  viewOnceState   String?
+  viewedAt        DateTime?
+  viewedBy        String?
+  deleted         Boolean  @default(false)
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User         @relation("MediaOwner", fields: [ownerId], references: [id])
+  viewer          User?        @relation("MediaViewer", fields: [viewedBy], references: [id])
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  messageLinks   MessageMedia[]
+
+  @@index([conversationId, createdAt])
+  @@index([ownerId, createdAt])
+  @@index([viewOnce, viewOnceState])
+  @@index([deleted])
+}
+
+model MessageMedia {
+  id         String   @id @default(cuid())
+  messageId  String
+  mediaId    String
+  message    Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  media      MediaObject @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, mediaId])
+  @@index([mediaId])
+}
+
+// ---------------------------------------------------------------------------
+// Realtime: outbox pattern
+// ---------------------------------------------------------------------------
+
+model OutboxEvent {
+  id            String   @id @default(cuid())
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  published     Boolean  @default(false)
+  publishedAt   DateTime?
+  attempts      Int      @default(0)
+  lastAttemptAt DateTime?
+  lastError     String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  createdBy     User?    @relation("OutboxCreator", fields: [createdById], references: [id])
+
+  @@index([published, createdAt])
+  @@index([aggregateType, aggregateId])
+  @@index([eventType, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Presence & typing
+// ---------------------------------------------------------------------------
+
+model UserPresence {
+  userId       String   @id
+  status       String   @default("offline") // online | away | offline
+  lastSeenAt   DateTime @default(now())
+  connId       String?
+  updatedAt    DateTime @updatedAt
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TypingSession {
+  id             String   @id @default(cuid())
+  userId         String?
+  resultJson     Json
+  attemptsJson   Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// WebRTC calls
+// ---------------------------------------------------------------------------
+
+model Call {
+  id             String   @id @default(cuid())
+  conversationId String
+  initiatorId    String
+  recipientId    String
+  kind           String   @default("audio")
+  status         String   // ringing | accepted | active | rejected | cancelled | ended | missed | timeout | failed
+  startReason    String?
+  endReason      String?
+  startedAt      DateTime @default(now())
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  durationMs     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  initiator      User         @relation("CallInitiator", fields: [initiatorId], references: [id])
+  recipient      User         @relation("CallRecipient", fields: [recipientId], references: [id])
+  participants   CallParticipant[]
+
+  @@index([conversationId, startedAt])
+  @@index([initiatorId, startedAt])
+  @@index([recipientId, startedAt])
+  @@index([status])
+}
+
+model CallParticipant {
+  id          String   @id @default(cuid())
+  callId      String
+  userId      String
+  role        String   // initiator | recipient
+  muted       Boolean  @default(false)
+  joinedAt    DateTime?
+  leftAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  call        Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, userId])
+}
+
+model WebRTCSession {
+  id           String   @id @default(cuid())
+  callId       String   @unique
+  sessionState String   @default("new") // new | connecting | connected | closed | failed
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Audit logs / admin access logs
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorId     String
+  action      String
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  actor       User     @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+}
+
+model AdminAccessLog {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  admin      User     @relation("AdminActor", fields: [adminId], references: [id])
+
+  @@index([adminId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// ---------------------------------------------------------------------------
+// Secret code / access configuration (single row)
+//
+// The plaintext code is stored in the database (not in source control) because
+// the server must hand it to the browser after a challenge is issued — local
+// keystroke detection is a documented product requirement. It is never embedded
+// in the client bundle, never logged, and rotated when an admin changes it.
+// ---------------------------------------------------------------------------
+
+model SecretCodeConfiguration {
+  id             Int      @id @default(1) // singleton
+  codePlaintext  String   @default("")
+  codeHash       String
+  codeSalt       String
+  maxLength      Int      @default(15)
+  caseSensitive  Boolean  @default(true)
+  epoch          Int      @default(1)
+  unlockCount    Int      @default(0)
+  updatedAt      DateTime?
+  updatedById    String?
+  createdAt      DateTime @default(now())
+}

@@ -1,36 +1,21 @@
-import { collectConfigIssuesFromEnv, hasFirebaseClientConfig, parsePublicEnv, type ConfigIssue } from '@mt/config';
+import { collectConfigIssuesFromEnv, type ConfigIssue } from '@mt/config';
 import { logger } from './logger';
 
 /**
- * Server-side reporting for the pure rules in `lib/config/diagnostics.ts`.
- *
- * The environment is only read once per process here, and each distinct problem
- * is logged once, so a misconfigured deployment says what is wrong on boot
- * instead of surfacing much later as an unrelated-looking 401 or 500.
+ * Server-side reporting for configuration problems.
  */
 const reported = new Set<string>();
 
-/**
- * Logs every configuration problem once per process.
- *
- * @param phase where the check ran (`boot`, `register`, …). Deliberately not
- *   called `context`: the logger redacts any field whose name contains "text".
- */
 export function reportConfigIssues(phase?: string): ConfigIssue[] {
   let issues: ConfigIssue[];
   try {
     issues = collectConfigIssuesFromEnv();
   } catch (error) {
-    // An unparsable environment already throws loudly where it is used; do not
-    // turn the diagnostic into a second, unrelated failure.
     logger.error('config.diagnostics_failed', { error: String(error) });
     return [];
   }
 
   for (const issue of issues) {
-    // Keyed on the message as well as the reason: one reason can cover several
-    // variables (both signing secrets being placeholders, for example), and each
-    // of them is a separate thing the operator has to fix.
     const key = `${issue.reason}:${issue.message}`;
     if (reported.has(key)) continue;
     reported.add(key);
@@ -41,22 +26,6 @@ export function reportConfigIssues(phase?: string): ConfigIssue[] {
   return issues;
 }
 
-/**
- * Whether the browser can authenticate with Firebase at all. Without
- * `NEXT_PUBLIC_FIREBASE_*` the auth client refuses to initialise
- * (lib/client/auth-client.ts), so no ID token ever reaches the API and every
- * request is rejected — this lets the server say why in its own log instead of
- * answering a bare 401.
- */
-export function firebaseClientConfigured(): boolean {
-  try {
-    return hasFirebaseClientConfig(parsePublicEnv());
-  } catch {
-    return false;
-  }
-}
-
-/** Test helper. */
 export function resetReportedConfigIssues(): void {
   reported.clear();
 }

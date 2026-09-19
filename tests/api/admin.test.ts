@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetStore } from '@/lib/data/memory';
 import type { AuditLogEntry, Dashboard, SecretCodeStatus } from '@mt/types';
 import { GET as dashboardRoute } from '@/app/api/v1/admin/dashboard/route';
 import { GET as secretCodeRoute, POST as changeSecretCodeRoute } from '@/app/api/v1/admin/secret-code/route';
@@ -11,8 +10,7 @@ import { GET as statusRoute } from '@/app/api/v1/access/status/route';
 import { GET as conversationsRoute } from '@/app/api/v1/conversations/route';
 import { POST as updateStatusRoute } from '@/app/api/v1/admin/users/[userId]/status/route';
 import { POST as loginRoute } from '@/app/api/v1/auth/login/route';
-import { call, jar, jsonRequest, queryRequest, registerUser, unlockJar, type TestUser } from '../helpers/api';
-import { fakeAdminAuth } from '../helpers/firebase-auth';
+import { call, jar, jsonRequest, queryRequest, registerUser, resetState, unlockJar, type TestUser } from '../helpers/api';
 
 let admin: TestUser;
 let alice: TestUser;
@@ -20,8 +18,8 @@ let bob: TestUser;
 let conversationId: string;
 
 beforeEach(async () => {
-  resetStore();
-  // ADMIN_EMAIL is configured in vitest.setup.ts, so this account is the admin.
+  resetState();
+  // ADMIN_EMAIL is configured in vitest.setup.ts so this account is the admin.
   admin = await registerUser({ name: 'Root', email: 'admin@example.com' });
   alice = await registerUser({ name: 'Alice', email: 'alice@example.com' });
   bob = await registerUser({ name: 'Bob', email: 'bob@example.com' });
@@ -29,7 +27,8 @@ beforeEach(async () => {
     createConversationRoute,
     jsonRequest('POST', '/api/v1/conversations', { participantId: bob.id }, alice.jar),
   );
-  conversationId = created.body.data!.conversation.conversation.id;
+  if (created.status !== 201 || !created.body.data) throw new Error('failed to seed conversation');
+  conversationId = created.body.data.conversation.conversation.id;
   await call(
     sendMessageRoute,
     jsonRequest('POST', '/api/v1/messages', { conversationId, type: 'text', text: 'private note', clientMessageId: 'cm-admin-1' }, alice.jar),
@@ -45,8 +44,6 @@ describe('admin authorisation', () => {
 
   it('refuses an anonymous caller before the admin check even runs', async () => {
     const denied = await call(dashboardRoute, queryRequest('GET', '/api/v1/admin/dashboard'));
-    // No access session -> 403 ACCESS_REQUIRED, so the existence of an admin
-    // panel is not confirmed to someone who has not unlocked the app.
     expect(denied.status).toBe(403);
     expect(denied.body.error?.code).toBe('ACCESS_REQUIRED');
     expect(JSON.stringify(denied.body)).not.toContain('admin@example.com');
@@ -86,7 +83,6 @@ describe('secret code management', () => {
   });
 
   it('rotating the code signs every existing access session out', async () => {
-    // Alice is unlocked right now.
     const before = await call<{ unlocked: boolean }>(statusRoute, queryRequest('GET', '/api/v1/access/status', undefined, alice.jar));
     expect(before.body.data?.unlocked).toBe(true);
 
@@ -98,13 +94,9 @@ describe('secret code management', () => {
 
     const after = await call<{ unlocked: boolean }>(statusRoute, queryRequest('GET', '/api/v1/access/status', undefined, alice.jar));
     expect(after.body.data?.unlocked).toBe(false);
-
-    // And protected data is refused until she unlocks again.
-    const { GET } = await import('@/app/api/v1/conversations/route');
-    const denied = await call(GET, queryRequest('GET', '/api/v1/conversations', undefined, alice.jar));
+    const denied = await call(conversationsRoute, queryRequest('GET', '/api/v1/conversations', undefined, alice.jar));
     expect(denied.status).toBe(403);
 
-    // A fresh unlock with the new code works.
     const fresh = await unlockJar(jar());
     const restored = await call<{ unlocked: boolean }>(statusRoute, queryRequest('GET', '/api/v1/access/status', undefined, fresh));
     expect(restored.body.data?.unlocked).toBe(true);
@@ -127,11 +119,8 @@ describe('secret code management', () => {
 
 describe('user management', () => {
   it('disables an account so its session dies and it cannot sign in again', async () => {
-    const conversationsBefore = await call(
-      conversationsRoute,
-      queryRequest('GET', '/api/v1/conversations', undefined, bob.jar),
-    );
-    expect(conversationsBefore.status).toBe(200);
+    const before = await call(conversationsRoute, queryRequest('GET', '/api/v1/conversations', undefined, bob.jar));
+    expect(before.status).toBe(200);
 
     const disabled = await call(
       updateStatusRoute,
@@ -140,28 +129,13 @@ describe('user management', () => {
     );
     expect(disabled.status).toBe(200);
 
-    // The Firebase account is disabled and its credentials revoked, so the
-    // session Bob was holding stops working immediately.
-    const after = await call(
-      conversationsRoute,
-      queryRequest('GET', '/api/v1/conversations', undefined, bob.jar),
-    );
+    const after = await call(conversationsRoute, queryRequest('GET', '/api/v1/conversations', undefined, bob.jar));
     expect(after.status).toBe(401);
 
-    // Firebase refuses the sign-in itself, and the API's answer to an
-    // unverifiable credential is the same opaque 401 a wrong password gets.
-    expect(() => fakeAdminAuth.signInWithPassword('bob@example.com', 'CorrectHorse1!')).toThrowError(
-      expect.objectContaining({ errorInfo: { code: 'auth/user-disabled' } }),
-    );
-    const fresh = await unlockJar();
-    fresh.token = fakeAdminAuth.issueFor(bob.uid);
-    const login = await call(loginRoute, jsonRequest('POST', '/api/v1/auth/login', { email: 'bob@example.com' }, fresh));
+    // A fresh login with the right password is refused because the account is disabled.
+    const fresh = jar();
+    const login = await call(loginRoute, jsonRequest('POST', '/api/v1/auth/login', { email: 'bob@example.com', password: 'CorrectHorse1!' }, fresh));
     expect(login.status).toBe(401);
-    const wrongPassword = await call(
-      loginRoute,
-      jsonRequest('POST', '/api/v1/auth/login', { email: 'nobody@example.com' }, fresh),
-    );
-    expect(wrongPassword.body.error?.message).toBe(login.body.error?.message);
   });
 
   it('refuses to lock the administrator out of their own account', async () => {

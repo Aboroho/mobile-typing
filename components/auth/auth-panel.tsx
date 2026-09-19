@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FieldError, Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { firebaseAuthMessage, getAuthClient } from '@/lib/client/auth-client';
+import { authClientMessage, getAuthClient } from '@/lib/client/auth-client';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAccessStore } from '@/stores/access-store';
 
@@ -254,7 +254,7 @@ function ForgotPassword({ email }: { email: string }) {
             setSent(true);
           } catch (error) {
             setFailure(
-              firebaseAuthMessage(error) ?? 'that reset email could not be sent, try again later',
+              authClientMessage(error) ?? 'that reset email could not be sent, try again later',
             );
           } finally {
             setBusy(false);

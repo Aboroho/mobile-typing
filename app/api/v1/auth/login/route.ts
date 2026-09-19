@@ -8,16 +8,11 @@ import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * Opens a session for a Firebase account the browser has just signed in to, and
- * returns the caller's application profile.
- */
 export const POST = routeHandler('/api/v1/auth/login', async (request) => {
   const input = parseWith(loginSchema, await readJson(request));
-  // Tight limit: this is the endpoint an attacker would hammer.
   await enforceRateLimit(request, 'auth:login', { limit: 8, windowMs: 10 * 60_000, subject: input.email });
 
-  const outcome = await login({ email: input.email, request });
+  const outcome = await login({ email: input.email, password: input.password, request });
   const access = await accessBindingCookie(request, outcome.user.id);
   logger.info('auth.login', { uid: outcome.user.id, ip: clientIp(request) });
 

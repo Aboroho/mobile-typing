@@ -201,9 +201,46 @@ export interface RateLimitRepo {
   consume(key: string, options: { limit: number; windowMs: number }): Promise<RateLimitResult>;
 }
 
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: Date;
+  lastActiveAt: Date;
+  expiresAt: Date;
+  revokedAt: Date | null;
+}
+
+export interface SessionUserJoin {
+  id: string;
+  email: string;
+  name: string | null;
+  disabled: boolean;
+}
+
+export interface SessionRepo {
+  create(input: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    userAgent: string | null;
+    ip: string | null;
+    createdAt: Date;
+    lastActiveAt: Date;
+    expiresAt: Date;
+  }): Promise<SessionRecord>;
+  findByTokenHash(tokenHash: string): Promise<(SessionRecord & { user: SessionUserJoin }) | null>;
+  touch(id: string, lastActiveAt: Date): Promise<void>;
+  revokeByTokenHash(tokenHash: string): Promise<void>;
+  revokeAllForUser(userId: string): Promise<number>;
+}
+
 export interface DataProvider {
-  readonly name: 'memory' | 'firestore';
+  readonly name: 'memory' | 'prisma' | 'firestore';
   users: UserRepo;
+  sessions: SessionRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
   media: MediaRepo;

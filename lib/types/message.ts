@@ -76,7 +76,8 @@ export interface Message extends EntityTimestamps {
   hiddenForUserIds: string[];
   /** Client supplied idempotency key so retries never duplicate a message. */
   clientMessageId: string | null;
-  metadata: Record<string, string | number | boolean | null>;
+  expiresAt: Timestamp | null;
+  metadata: Record<string, unknown>;
 }
 
 /** Compact shape used for conversation list previews and admin search hits. */

@@ -12,8 +12,8 @@ import type {
 import { formatDuration } from '@mt/utils';
 import type { AdminUserRow } from '@mt/types';
 import { getData, type UserRecord } from '../data';
-import { setFirebaseUserDisabled } from '../auth/firebase';
 import { isAdminUser } from '../auth/session';
+import { revokeAllSessionsForUser } from '../auth/session';
 import { writeAuditLog } from '../security/audit';
 import { ensureAccessConfig } from '../access/access-service';
 import { toCallView } from './call-service';
@@ -145,7 +145,11 @@ export async function updateUserStatus(input: {
   if (isAdminUser(record)) {
     throw new AppError('FORBIDDEN', 'the administrator account cannot be disabled');
   }
-  await setFirebaseUserDisabled(input.userId, input.status === 'disabled');
+  // When disabling an account, revoke all active sessions so the user is
+  // immediately logged out on every device.
+  if (input.status === 'disabled') {
+    await revokeAllSessionsForUser(input.userId).catch(() => null);
+  }
   const updated = await data.users.update(input.userId, {
     status: input.status,
     disabledReason: input.status === 'disabled' ? (input.reason ?? null) : null,

@@ -11,9 +11,9 @@ export const GET = routeHandler('/api/v1/health', async () => {
   const config = await ensureAccessConfig();
   return jsonOk({
     ok: true,
-    version: '1.0.0',
+    version: '2.0.0',
     dataProvider: data.name,
-    authProvider: 'firebase',
+    authProvider: 'argon2-session',
     storageProvider: env().STORAGE_PROVIDER,
     time: new Date().toISOString(),
     access: {

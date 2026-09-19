@@ -1,11 +1,13 @@
 import { assertFallbackAllowed, env } from '../env';
 import { logger } from '../logger';
-import { createFirebaseStorageProvider } from './firebase';
 import { createMemoryStorageProvider } from './memory';
+import { createLocalStorageProvider } from './local';
+import { createS3StorageProvider } from './s3';
 import type { StorageProvider } from './types';
 
-export type { StorageProvider, StoredObject } from './types';
+export type { StorageProvider, StoredObject, SignedUpload } from './types';
 export { resetMemoryStorage } from './memory';
+export { verifyHmac } from './local';
 
 let cached: StorageProvider | null = null;
 let cachedName: string | null = null;
@@ -13,8 +15,10 @@ let cachedName: string | null = null;
 export function getStorage(): StorageProvider {
   const configured = env().STORAGE_PROVIDER;
   if (cached && cachedName === configured) return cached;
-  if (configured === 'firebase') {
-    cached = createFirebaseStorageProvider();
+  if (configured === 's3') {
+    cached = createS3StorageProvider();
+  } else if (configured === 'local') {
+    cached = createLocalStorageProvider();
   } else {
     assertFallbackAllowed('in-memory storage');
     cached = createMemoryStorageProvider();

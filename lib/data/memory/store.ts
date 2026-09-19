@@ -64,6 +64,7 @@ export function paginate<T extends { id: string }>(
 
 interface StoreShape {
   users: Map<string, unknown>;
+  sessions: Map<string, unknown>;
   conversations: Map<string, unknown>;
   messages: Map<string, unknown>;
   media: Map<string, unknown>;
@@ -87,6 +88,7 @@ export function getStore(): StoreShape {
   if (!target[GLOBAL_KEY]) {
     target[GLOBAL_KEY] = {
       users: new Map(),
+      sessions: new Map(),
       conversations: new Map(),
       messages: new Map(),
       media: new Map(),

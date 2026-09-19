@@ -1,15 +1,13 @@
 /**
- * Authentication is Firebase Authentication — there is no second provider and no
- * development fallback.
+ * Authentication module.
  *
- *  - `./firebase`  the trusted boundary with the Admin SDK (verify ID tokens and
- *    session cookies, mint session cookies, revoke, disable).
- *  - `./session`   resolves a request to an application profile.
- *  - `./guard`     the `requireUser` / `requireAdmin` / `requireAccess` gates the
- *    API routes call.
- *  - `./cookies` and `./session-cookies`  cookie plumbing.
- *
- * The browser side lives in `lib/client/auth-client.ts` (Firebase client SDK).
+ *  - `./password`  Argon2id hashing helpers.
+ *  - `./session`   Database-backed session verification/minting.
+ *  - `./guard`     `requireUser` / `requireAdmin` / `requireAccess` gates used by API routes.
+ *  - `./cookies` / `./session-cookies`  cookie plumbing.
  */
 export * from './types';
-export * from './firebase';
+export * from './session';
+export * from './session-cookies';
+export * from './guard';
+export * from './cookies';

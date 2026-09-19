@@ -1,238 +1,203 @@
-import { AppError, isAppError, sanitizeName } from '@mt/domain';
-import { ApiErrorCode } from '@mt/types';
-import { nowIso } from '@mt/utils';
+import { AppError, sanitizeName } from '@mt/domain';
+import { nowIso, newUid } from '@mt/utils';
 import { getData, type UserRecord } from '../data';
-import { revokeFirebaseSessions } from '../auth/firebase';
-import { establishSession, type CookieInstruction, type EstablishedSession } from '../auth/session-cookies';
-import { isAdminUser, verifyRequestToken } from '../auth/session';
-import type { VerifiedToken } from '../auth/types';
-import { firebaseClientConfigured } from '../diagnostics';
+import { hashPassword, verifyPassword } from '../auth/password';
+import { createSession, clearSessionCookie, verifySession, revokeAllSessionsForUser, isAdminUser, type CookieInstruction } from '../auth/session';
 import { logger } from '../logger';
 
 export interface AuthOutcome {
   user: UserRecord;
-  /**
-   * Always `null`. The Firebase ID token belongs to the browser SDK, which
-   * attaches it to API calls itself; this API never hands a credential back.
-   */
   token: null;
-  /** The session lives in the httpOnly `mt_session` cookie. */
   cookieSession: boolean;
-  /** The session cookie to set, when a fresh credential allowed one to be minted. */
   session: CookieInstruction | null;
 }
 
-/**
- * Explains, in the server log, the one misconfiguration that makes every
- * sign-up and sign-in fail with a bare 401: the browser has no Firebase app to
- * authenticate against, so no ID token ever reaches this API.
- *
- * A 401 is the correct answer to an unauthenticated caller and it is not safe to
- * explain a deployment's configuration to an anonymous client, so the cause is
- * written where the operator will find it — naming the variables, never their
- * values.
- */
-function reportUnverifiableCredential(route: string): void {
-  if (!firebaseClientConfigured()) {
-    logger.error('auth.firebase_client_config_missing', {
-      route,
-      detail:
-        'The browser cannot obtain a Firebase ID token because the Firebase web configuration is incomplete: ' +
-        'NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID, ' +
-        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID and NEXT_PUBLIC_FIREBASE_APP_ID must all be set. ' +
-        'Until they are, registration and login can never authenticate.',
-    });
-    return;
-  }
-  logger.warn('auth.credential_rejected', { route });
+/** Helper for rate-limit subject key. */
+export function authKey(email: string): string {
+  return email.trim().toLowerCase();
 }
 
-/** Verifies the caller's Firebase credential, with the operator diagnostic above. */
-async function authenticate(
-  request: Request,
-  route: string,
-  options: { failureMessage: string; requireFresh?: boolean },
-): Promise<EstablishedSession> {
-  try {
-    return await establishSession(request, options);
-  } catch (error) {
-    if (isAppError(error) && error.code === ApiErrorCode.UNAUTHENTICATED) {
-      reportUnverifiableCredential(route);
-    }
-    throw error;
-  }
+/** Verify current session, if any. Used by /auth/me. */
+export async function getMe(request: Request): Promise<UserRecord | null> {
+  const verified = await verifySession(request);
+  if (!verified) return null;
+  const data = await getData();
+  return data.users.getById(verified.uid);
 }
 
 /**
- * Registration.
- *
- * The browser has already created the Firebase account with
- * `createUserWithEmailAndPassword`, set its display name and obtained an ID
- * token; this call turns that verified identity into an application profile and
- * a session. Passwords never reach the API, and the uid is taken from the
- * verified credential — never from the request body.
- *
- * It is idempotent for the authenticated identity, which is what makes a retry
- * after a transient profile-write failure safe.
+ * Registration: password is verified against Argon2, the user record is
+ * created, and a fresh session cookie is issued. Idempotent on email+password.
  */
 export async function register(input: {
   name: string;
-  email?: string;
+  email: string;
+  password: string;
   request: Request;
 }): Promise<AuthOutcome> {
-  const { verified, cookie } = await authenticate(input.request, 'register', {
-    failureMessage: 'complete the Firebase sign-up first',
-  });
+  const email = input.email.trim().toLowerCase();
   const data = await getData();
-  const name = sanitizeName(input.name);
-  const email = requireEmail(verified);
 
-  if (conflictingEmail(input.email, email)) {
-    logger.warn('auth.register_email_mismatch', { uid: verified.uid });
-    throw AppError.conflict('that account cannot be linked to this profile');
-  }
-
-  const existing = await data.users.getById(verified.uid);
+  const existing = await data.users.getByEmail(email);
   if (existing) {
-    if (existing.email.trim().toLowerCase() !== email) {
-      logger.warn('auth.firebase_profile_email_mismatch', { uid: verified.uid });
-      throw AppError.conflict('that account cannot be linked to this profile');
+    // To avoid account enumeration, respond exactly as we would for login but
+    // do NOT create a new account. A password mismatch becomes a generic 401.
+    const ok = await verifyPassword(input.password, (existing as unknown as { passwordHash?: string }).passwordHash ?? '$invalid$');
+    if (!ok) {
+      logger.warn('auth.register_email_taken_wrong_password', { email });
+      throw AppError.unauthenticated('unable to create an account with those details');
     }
-    return outcome(existing, cookie);
+    logger.warn('auth.register_email_taken_reissues_session', { email });
+    return loginForUser(existing, input.request);
   }
 
-  // Do not associate a new Firebase uid with an application profile that belongs
-  // to another uid, even when the email is duplicated or stale in the request:
-  // that profile's conversations and messages belong to somebody else.
-  const emailOwner = await data.users.getByEmail(email);
-  if (emailOwner) {
-    logger.warn('auth.register_email_taken_by_other_uid', { uid: verified.uid, ownerId: emailOwner.id });
-    throw AppError.conflict('unable to create that account');
-  }
-
-  const record = await createProfile({ id: verified.uid, email, name });
-  return outcome(record, cookie);
+  const passwordHash = await hashPassword(input.password);
+  const now = nowIso();
+  const id = newUid();
+  const record: UserRecord = {
+    id,
+    name: sanitizeName(input.name),
+    email,
+    photoUrl: null,
+    status: 'active',
+    lastLoginAt: now,
+    isAdmin: isAdminUser({ id, email }),
+    createdAt: now,
+    updatedAt: now,
+    disabledReason: null,
+  };
+  // Persist password hash separately since the UserRecord interface does not
+  // expose it to callers above the data layer. We write it directly via Prisma
+  // when DATA_PROVIDER=prisma; the memory provider stores it alongside the
+  // record in its Map for dev/test parity.
+  await createUserWithHash(record, passwordHash);
+  await data.users.touchLogin(record.id, now);
+  logger.info('auth.profile_created', { uid: record.id });
+  return loginForUser(record, input.request);
 }
 
 /**
- * Login.
- *
- * The password was checked by Firebase in the browser; here the verified
- * credential becomes a session plus the caller's existing application profile.
- * A missing profile is recovered instead of failing, so an account whose profile
- * document was lost can still sign in.
+ * Login: email + password verified against the stored Argon2 hash. A fresh
+ * session is issued on success; disabled accounts are rejected with the same
+ * generic error used for invalid credentials.
  */
-export async function login(input: { email?: string; request: Request }): Promise<AuthOutcome> {
-  const { verified, cookie } = await authenticate(input.request, 'login', {
-    // One opaque message for every failure mode: a wrong password, an unknown
-    // email and a disabled account must be indistinguishable from the outside.
-    failureMessage: 'unable to sign in with those details',
-  });
+export async function login(input: {
+  email: string;
+  password: string;
+  request: Request;
+}): Promise<AuthOutcome> {
+  const email = input.email.trim().toLowerCase();
   const data = await getData();
-  const email = requireEmail(verified);
-
-  if (conflictingEmail(input.email, email)) {
-    logger.warn('auth.login_email_mismatch', { uid: verified.uid });
+  const record = await data.users.getByEmail(email);
+  if (!record) {
+    logger.warn('auth.login_unknown_email', { email });
     throw AppError.unauthenticated('unable to sign in with those details');
   }
-
-  const record = await ensureProfile(verified, email);
+  const hash = await getPasswordHash(record.id);
+  if (!hash) {
+    logger.warn('auth.login_missing_hash', { uid: record.id });
+    throw AppError.unauthenticated('unable to sign in with those details');
+  }
+  const ok = await verifyPassword(input.password, hash);
+  if (!ok) {
+    logger.warn('auth.login_bad_password', { uid: record.id });
+    throw AppError.unauthenticated('unable to sign in with those details');
+  }
   if (record.status === 'disabled') {
     logger.warn('auth.login_disabled', { uid: record.id });
     throw AppError.unauthenticated('unable to sign in with those details');
   }
   await data.users.touchLogin(record.id, nowIso());
-  return outcome(record, cookie);
+  return loginForUser(record, input.request);
 }
 
 /**
- * Password gate for an already signed-in user (the third access-flow branch).
- *
- * The browser re-authenticated with `reauthenticateWithCredential`, which resets
- * Firebase's `auth_time`; `requireFresh` is what proves that happened. Without a
- * recent credential the gate would be a no-op, so it is refused rather than
- * accepted.
+ * Re-authentication: an already logged-in user must provide their password
+ * again to unlock the chat (the third access-flow branch).
  */
-export async function reauthenticate(input: { request: Request }): Promise<AuthOutcome> {
-  const { verified, cookie } = await authenticate(input.request, 'reauthenticate', {
-    failureMessage: 'sign in again to continue',
-    requireFresh: true,
-  });
-  const record = await ensureProfile(verified, requireEmail(verified));
-  return outcome(record, cookie);
-}
-
-/**
- * Logout.
- *
- * Revokes the caller's Firebase credentials server side (ID tokens, session
- * cookies and refresh tokens), so a cookie that was copied before logout cannot
- * be replayed afterwards. It must also succeed for a caller who is already
- * signed out: clearing the cookies is the part the browser depends on.
- */
-export async function logout(request: Request): Promise<{ revoked: boolean }> {
-  const verified = await verifyRequestToken(request);
-  if (!verified) return { revoked: false };
-  const revoked = await revokeFirebaseSessions(verified.uid);
-  logger.info('auth.logout', { uid: verified.uid, revoked });
-  return { revoked };
-}
-
-function outcome(user: UserRecord, session: CookieInstruction | null): AuthOutcome {
-  return { user, token: null, cookieSession: true, session };
-}
-
-function requireEmail(verified: VerifiedToken): string {
-  const email = verified.email.trim().toLowerCase();
-  if (!email) {
-    logger.warn('auth.firebase_token_missing_email', { uid: verified.uid });
-    throw AppError.unauthenticated('your Firebase account does not have an email address');
+export async function reauthenticate(input: {
+  password: string;
+  request: Request;
+}): Promise<AuthOutcome> {
+  const verified = await verifySession(input.request);
+  if (!verified) {
+    throw AppError.unauthenticated('sign in again to continue');
   }
-  return email;
-}
-
-/** The email in the body is a cross-check only; the credential decides. */
-function conflictingEmail(submitted: string | undefined, verifiedEmail: string): boolean {
-  const normalized = submitted?.trim().toLowerCase();
-  return Boolean(normalized) && normalized !== verifiedEmail;
-}
-
-/** Loads the caller's profile, creating it when Firebase knows them but we do not. */
-async function ensureProfile(verified: VerifiedToken, email: string): Promise<UserRecord> {
   const data = await getData();
-  const existing = await data.users.getById(verified.uid);
-  if (existing) return existing;
-  const fallbackName = verified.displayName ?? email.split('@')[0] ?? 'User';
-  logger.warn('auth.profile_recreated', { uid: verified.uid });
-  return createProfile({ id: verified.uid, email, name: fallbackName });
+  const record = await data.users.getById(verified.uid);
+  if (!record) throw AppError.unauthenticated('sign in again to continue');
+  const hash = await getPasswordHash(record.id);
+  if (!hash || !(await verifyPassword(input.password, hash))) {
+    throw AppError.unauthenticated('password is incorrect');
+  }
+  return loginForUser(record, input.request);
 }
 
-/**
- * Creates the application profile for a verified Firebase identity.
- *
- * The Firebase uid *is* the application user id, which is what conversations,
- * messages, media and calls already reference. No password material is stored:
- * Firebase Authentication owns the credential.
- */
-async function createProfile(input: { id: string; email: string; name: string }): Promise<UserRecord> {
-  const data = await getData();
-  const now = nowIso();
-  const record: UserRecord = {
-    id: input.id,
-    name: sanitizeName(input.name),
-    email: input.email.trim().toLowerCase(),
-    photoUrl: null,
-    status: 'active',
-    lastLoginAt: now,
-    isAdmin: false,
-    createdAt: now,
-    updatedAt: now,
-    disabledReason: null,
+export async function logout(request: Request): Promise<{ revoked: boolean; clearCookie: CookieInstruction }> {
+  const verified = await verifySession(request);
+  if (!verified) return { revoked: false, clearCookie: clearSessionCookie() };
+  // Revoke *all* sessions for this user (conservative — safer than leaving
+  // other devices logged in after an explicit logout).
+  const count = await revokeAllSessionsForUser(verified.uid);
+  logger.info('auth.logout', { uid: verified.uid, revoked: count });
+  return { revoked: count > 0, clearCookie: clearSessionCookie() };
+}
+
+async function loginForUser(user: UserRecord, request: Request): Promise<AuthOutcome> {
+  const userAgent = request.headers.get('user-agent');
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const cookie = await createSession({ userId: user.id, userAgent, ip });
+  return {
+    user: { ...user, isAdmin: isAdminUser(user) },
+    token: null,
+    cookieSession: true,
+    session: cookie,
   };
-  // Derived from the server environment, so a public registration can never
-  // grant itself the administrator role.
-  record.isAdmin = isAdminUser(record);
-  await data.users.create(record);
-  logger.info('auth.profile_created', { uid: record.id });
-  return record;
+}
+
+// ---------------------------------------------------------------------------
+// Password-hash persistence helpers. These are deliberately small so the
+// memory and prisma providers don't need schema changes to hold a hash.
+// ---------------------------------------------------------------------------
+
+async function createUserWithHash(record: UserRecord, passwordHash: string): Promise<void> {
+  const data = await getData();
+  if (data.name === 'prisma') {
+    const { getPrisma } = await import('../prisma');
+    const prisma = await getPrisma();
+    await prisma.user.create({
+      data: {
+        id: record.id,
+        name: record.name,
+        email: record.email,
+        emailNormalized: record.email.toLowerCase(),
+        passwordHash,
+        photoUrl: record.photoUrl,
+        status: record.status,
+        disabledReason: record.disabledReason,
+        lastLoginAt: record.lastLoginAt ? new Date(record.lastLoginAt) : null,
+      },
+    });
+    return;
+  }
+  // Memory provider path: stash the hash on the Map entry directly.
+  const target = globalThis as unknown as Record<string, any>;
+  const store = target.__mt_memory_store_v1;
+  const users = store?.users as Map<string, UserRecord & { passwordHash?: string }> | undefined;
+  const created = await data.users.create(record);
+  users?.set(record.id, { ...created, passwordHash });
+}
+
+async function getPasswordHash(userId: string): Promise<string | null> {
+  const data = await getData();
+  if (data.name === 'prisma') {
+    const { getPrisma } = await import('../prisma');
+    const prisma = await getPrisma();
+    const row = await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+    return (row as { passwordHash?: string | null } | null)?.passwordHash ?? null;
+  }
+  const target = globalThis as unknown as Record<string, any>;
+  const store = target.__mt_memory_store_v1;
+  const users = store?.users as Map<string, UserRecord & { passwordHash?: string }> | undefined;
+  return users?.get(userId)?.passwordHash ?? null;
 }
