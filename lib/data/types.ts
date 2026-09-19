@@ -237,6 +237,23 @@ export interface SessionRepo {
   revokeAllForUser(userId: string): Promise<number>;
 }
 
+export interface OutboxEventRecord {
+  id: string;
+  userId: string;
+  topic: string;
+  type: string;
+  payload: unknown;
+  createdAt: Date;
+  deliveredAt: Date | null;
+}
+
+export interface OutboxRepo {
+  enqueue(input: { id: string; userId: string; topic: string; type: string; payload: unknown; createdAt: Date }): Promise<OutboxEventRecord>;
+  listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]>;
+  markDelivered(ids: string[]): Promise<void>;
+  claimPending(limit: number): Promise<OutboxEventRecord[]>;
+}
+
 export interface DataProvider {
   readonly name: 'memory' | 'prisma' | 'firestore';
   users: UserRepo;
@@ -249,4 +266,5 @@ export interface DataProvider {
   audit: AuditRepo;
   typingSessions: TypingSessionRepo;
   rateLimits: RateLimitRepo;
+  outbox: OutboxRepo;
 }

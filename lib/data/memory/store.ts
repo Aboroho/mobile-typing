@@ -72,6 +72,7 @@ interface StoreShape {
   auditLogs: unknown[];
   typingSessions: unknown[];
   rateLimits: Map<string, { count: number; resetAt: number }>;
+  outbox: unknown[];
   accessConfig: unknown;
   counters: Map<string, number>;
 }
@@ -96,6 +97,7 @@ export function getStore(): StoreShape {
       auditLogs: [],
       typingSessions: [],
       rateLimits: new Map(),
+      outbox: [],
       accessConfig: null,
       counters: new Map(),
     };

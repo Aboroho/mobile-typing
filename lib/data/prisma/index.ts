@@ -41,6 +41,8 @@ import type {
   ListUsersParams,
   MediaRepo,
   MessageRepo,
+  OutboxEventRecord,
+  OutboxRepo,
   RateLimitRepo,
   SessionRecord,
   SessionRepo,
@@ -1034,6 +1036,40 @@ class PrismaTypingSessions implements TypingSessionRepo {
   }
 }
 
+class PrismaOutbox implements OutboxRepo {
+  async enqueue(input: { id: string; userId: string; topic: string; type: string; payload: unknown; createdAt: Date }): Promise<OutboxEventRecord> {
+    const p = await db();
+    const created = await p.outboxEvent.create({
+      data: {
+        id: input.id,
+        userId: input.userId,
+        topic: input.topic,
+        type: input.type,
+        payload: input.payload as Record<string, unknown>,
+        createdAt: input.createdAt,
+      },
+    });
+    return { id: created.id, userId: created.userId, topic: created.topic, type: created.type, payload: created.payload, createdAt: created.createdAt, deliveredAt: created.deliveredAt };
+  }
+  async listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]> {
+    const p = await db();
+    const where: Record<string, unknown> = { userId };
+    if (afterId) where.id = { gt: afterId };
+    const rows = await p.outboxEvent.findMany({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limit });
+    return (rows as any[]).map((r) => ({ id: r.id, userId: r.userId, topic: r.topic, type: r.type, payload: r.payload, createdAt: r.createdAt, deliveredAt: r.deliveredAt }));
+  }
+  async markDelivered(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const p = await db();
+    await p.outboxEvent.updateMany({ where: { id: { in: ids } }, data: { deliveredAt: new Date() } });
+  }
+  async claimPending(limit: number): Promise<OutboxEventRecord[]> {
+    const p = await db();
+    const rows = await p.outboxEvent.findMany({ where: { deliveredAt: null }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limit });
+    return (rows as any[]).map((r) => ({ id: r.id, userId: r.userId, topic: r.topic, type: r.type, payload: r.payload, createdAt: r.createdAt, deliveredAt: r.deliveredAt }));
+  }
+}
+
 export function createPrismaDataProvider(): DataProvider {
   return {
     name: 'prisma',
@@ -1047,6 +1083,7 @@ export function createPrismaDataProvider(): DataProvider {
     audit: new PrismaAudit(),
     typingSessions: new PrismaTypingSessions(),
     rateLimits: new PrismaRateLimits(),
+    outbox: new PrismaOutbox(),
   };
 }
 

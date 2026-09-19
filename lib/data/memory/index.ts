@@ -29,6 +29,8 @@ import type {
   ListUsersParams,
   MediaRepo,
   MessageRepo,
+  OutboxEventRecord,
+  OutboxRepo,
   RateLimitRepo,
   SessionRecord,
   SessionRepo,
@@ -551,6 +553,29 @@ class MemorySessions implements SessionRepo {
   }
 }
 
+class MemoryOutbox implements OutboxRepo {
+  private get store() { return getStore().outbox as OutboxEventRecord[]; }
+  async enqueue(input: { id: string; userId: string; topic: string; type: string; payload: unknown; createdAt: Date }): Promise<OutboxEventRecord> {
+    const rec: OutboxEventRecord = { ...input, deliveredAt: null };
+    this.store.push(rec);
+    return rec;
+  }
+  async listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]> {
+    let items = this.store.filter((e) => e.userId === userId);
+    if (afterId) items = items.filter((e) => e.id > afterId);
+    items.sort((a, b) => (a.createdAt.getTime() - b.createdAt.getTime()) || a.id.localeCompare(b.id));
+    return items.slice(0, limit);
+  }
+  async markDelivered(ids: string[]): Promise<void> {
+    const set = new Set(ids);
+    for (const e of this.store) if (set.has(e.id)) e.deliveredAt = new Date();
+  }
+  async claimPending(limit: number): Promise<OutboxEventRecord[]> {
+    const pending = this.store.filter((e) => e.deliveredAt === null).slice(0, limit);
+    return pending;
+  }
+}
+
 class MemoryRateLimits implements RateLimitRepo {
   async consume(key: string, options: { limit: number; windowMs: number }) {
     const buckets = getStore().rateLimits;
@@ -585,6 +610,7 @@ export function createMemoryDataProvider(): DataProvider {
     audit: new MemoryAudit(),
     typingSessions: new MemoryTypingSessions(),
     rateLimits: new MemoryRateLimits(),
+    outbox: new MemoryOutbox(),
   };
 }
 
