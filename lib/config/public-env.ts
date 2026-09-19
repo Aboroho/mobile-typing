@@ -34,6 +34,8 @@ export const publicEnvSchema = z.object({
    * private deployment with its own access control).
    */
   NEXT_PUBLIC_ENABLE_TYPING_GAME: booleanish.default(true),
+  /** Auth emulator host for local development (e.g. 127.0.0.1:9099). */
+  NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
 });
 
 export type PublicEnv = z.infer<typeof publicEnvSchema>;

@@ -24,6 +24,8 @@
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "seed": "node scripts/seed-dev.mjs",
     "doctor": "node scripts/check-firebase.mjs",
+    "emulator": "firebase emulators:start --only auth --project demo-project",
+    "emulators": "firebase emulators:start --project demo-project",
     "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage.rules,firestore:indexes"
   },
   "dependencies": {

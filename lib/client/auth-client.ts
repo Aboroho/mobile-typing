@@ -76,6 +76,20 @@ async function createAuthClient(): Promise<AuthClient> {
       appId: publicEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
     });
   const firebaseAuth = auth.getAuth(app);
+  // When the Auth emulator is requested, point the client SDK at it. This is
+  // the browser counterpart to FIREBASE_AUTH_EMULATOR_HOST for the Admin SDK.
+  const emulatorHost =
+    publicEnv.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST ??
+    (process.env.FIREBASE_AUTH_EMULATOR_HOST as string | undefined) ??
+    (process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST as string | undefined);
+  if (emulatorHost) {
+    try {
+      const url = emulatorHost.startsWith('http') ? emulatorHost : `http://${emulatorHost}`;
+      auth.connectAuthEmulator(firebaseAuth, url, { disableWarnings: true });
+    } catch {
+      // connectAuthEmulator throws if called twice; ignore second call.
+    }
+  }
 
   const toClientUser = (user: { uid: string; email: string | null; displayName: string | null } | null) =>
     user ? { uid: user.uid, email: user.email, displayName: user.displayName } : null;
