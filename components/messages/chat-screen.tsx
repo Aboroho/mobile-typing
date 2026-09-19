@@ -14,10 +14,15 @@ import { Input } from '@/components/ui/input';
 import { Composer } from './composer';
 import { MessageBubble } from './message-bubble';
 
+// Zustand selectors are read through React's useSyncExternalStore. Returning a
+// new array for a missing conversation makes every snapshot look different and
+// causes React to render forever, so the fallback must have a stable identity.
+const EMPTY_MESSAGES: MessageForUser[] = [];
+
 export function ChatScreen({ conversationId, onBack }: { conversationId: string; onBack: () => void }) {
   const user = useAuthStore((state) => state.user);
   const conversation = useChatStore((state) => state.activeConversation);
-  const messages = useChatStore((state) => state.messages[conversationId] ?? []);
+  const messages = useChatStore((state) => state.messages[conversationId] ?? EMPTY_MESSAGES);
   const typing = useChatStore((state) => state.typingPeer[conversationId] ?? false);
   const openConversation = useChatStore((state) => state.openConversation);
   const loadOlder = useChatStore((state) => state.loadOlderMessages);

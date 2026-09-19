@@ -30,6 +30,7 @@ export const GET = routeHandler<{ conversationId: string }>(
         if (payload.otherUserId) return payload.otherUserId === user.id;
         return true;
       },
+      signal: request.signal,
     });
 
     return new Response(stream, {
