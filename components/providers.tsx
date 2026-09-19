@@ -17,12 +17,14 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((state) => state.user);
   const handleSessionRequired = useAuthStore((state) => state.handleSessionRequired);
   const lock = useAccessStore((state) => state.lock);
+  const refreshAccess = useAccessStore((state) => state.refresh);
   const setPrivacyLocked = useUiStore((state) => state.setPrivacyLocked);
 
   useEffect(() => {
     initTheme();
+    void refreshAccess();
     void initialize();
-  }, [initialize]);
+  }, [initialize, refreshAccess]);
 
   // A revoked/expired access session (403 ACCESS_REQUIRED) returns to the game.
   useEffect(() => {

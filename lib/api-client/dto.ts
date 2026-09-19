@@ -72,7 +72,7 @@ export type ChallengeResponse = AccessChallenge;
 export interface AccessStatusResponse {
   status: AccessChallengeStatus;
   unlocked: boolean;
-  session: { epoch: number; expiresAt: string } | null;
+  session: { epoch: number; expiresAt: string; userId?: string | null } | null;
 }
 
 export interface ConversationListResponse {

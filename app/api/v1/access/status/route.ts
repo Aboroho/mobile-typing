@@ -18,6 +18,9 @@ export const GET = routeHandler('/api/v1/access/status', async (request) => {
   return jsonOk({
     status,
     unlocked: valid,
-    session: valid && session ? { epoch: session.epoch, expiresAt: session.expiresAt } : null,
+    session:
+      valid && session
+        ? { epoch: session.epoch, expiresAt: session.expiresAt, userId: session.userId }
+        : null,
   });
 });

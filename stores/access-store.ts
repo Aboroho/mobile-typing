@@ -42,7 +42,16 @@ export const useAccessStore = create<AccessState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const { challenge } = await api.access.challenge();
-      set({ challenge, status: { epoch: challenge.epoch, maxLength: challenge.maxLength, caseSensitive: challenge.caseSensitive, configured: true }, loading: false });
+      set({
+        challenge,
+        status: {
+          epoch: challenge.epoch,
+          maxLength: challenge.maxLength,
+          caseSensitive: challenge.caseSensitive,
+          configured: true,
+        },
+        loading: false,
+      });
       return challenge;
     } catch (error) {
       set({ loading: false, error: errorMessage(error) });
@@ -87,7 +96,8 @@ export const useAccessStore = create<AccessState>((set, get) => ({
     } catch {
       // The server session will expire on its own; the UI is already locked.
     }
-    if (!options?.silent) useUiStore.getState().pushToast('Locked. Type the sequence again to continue.');
+    if (!options?.silent)
+      useUiStore.getState().pushToast('Locked. Type the sequence again to continue.');
   },
 
   async refresh() {
@@ -98,6 +108,7 @@ export const useAccessStore = create<AccessState>((set, get) => ({
       set({
         status,
         unlocked,
+        boundUserId: session?.userId ?? null,
         epoch: status.epoch,
         expiresAt: session?.expiresAt ?? null,
         ...(unlocked ? {} : { challenge: null }),
