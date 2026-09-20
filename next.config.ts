@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   // so remote patterns stay empty and `next/image` is not used for user media.
   images: { remotePatterns: [] },
   output: 'standalone',
+   allowedDevOrigins: ['192.168.0.108'],
 };
 
 export default nextConfig;
