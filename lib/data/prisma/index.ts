@@ -72,6 +72,25 @@ function toDateOrNull(ts: Timestamp | null | undefined): Date | null {
   return new Date(ts);
 }
 
+/**
+ * Keyset filter for newest-first listings.
+ *
+ * Cursors encode `${createdAtMs}|${id}` (see memory/store.ts). Prisma's
+ * `cursor` option requires a unique constraint, which `(createdAt, id)` is
+ * not, so pagination is expressed as a `where` clause instead: strictly older
+ * than the cursor, or same timestamp with a greater id (matching the
+ * in-memory provider's `afterCursor` + `id asc` tiebreak).
+ */
+function newestFirstCursorFilter(
+  cursor: string | null | undefined,
+  field: string,
+): Array<Record<string, unknown>> {
+  const c = decodeCursor(cursor);
+  if (!c) return [];
+  const at = new Date(c.createdAtMs);
+  return [{ OR: [{ [field]: { lt: at } }, { [field]: at, id: { gt: c.id } }] }];
+}
+
 // Lazy load prisma client.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _prisma: any = null;
@@ -259,17 +278,12 @@ class PrismaUsers implements UserRepo {
     for (const g of msgGroups) msgCounts.set(g.senderId, g._count.id);
     const convCounts = new Map<string, number>();
     for (const g of convGroups) convCounts.set(g.userId, g._count.id);
+    const cursorFilters = newestFirstCursorFilter(params.cursor, 'createdAt');
     const queryExtra: Record<string, unknown> = {
-      where,
+      where: cursorFilters.length > 0 ? { ...where, AND: cursorFilters } : where,
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: params.limit + 1,
     };
-    if (params.cursor) {
-      const c = decodeCursor(params.cursor);
-      if (c) {
-        Object.assign(queryExtra, { cursor: { createdAt: new Date(c.createdAtMs), id: c.id }, skip: 1 });
-      }
-    }
     const users = await p.user.findMany(queryExtra);
     const hasMore = users.length > params.limit;
     const page = users.slice(0, params.limit);
@@ -364,6 +378,9 @@ class PrismaConversations implements ConversationRepo {
             return {
               userId: uid,
               lastReadAt: state?.lastReadAt ? new Date(state.lastReadAt) : null,
+              lastReadMessageAt: state?.lastReadMessageAt
+                ? new Date(state.lastReadMessageAt)
+                : null,
               unreadCount: state?.unreadCount ?? 0,
               hidden: state?.hidden ?? false,
               hiddenAt: state?.hiddenAt ? new Date(state.hiddenAt) : null,
@@ -389,6 +406,9 @@ class PrismaConversations implements ConversationRepo {
     const p = await db();
     const data: Record<string, unknown> = {};
     if (patch.lastReadAt !== undefined) data.lastReadAt = patch.lastReadAt ? new Date(patch.lastReadAt) : null;
+    if (patch.lastReadMessageAt !== undefined) {
+      data.lastReadMessageAt = patch.lastReadMessageAt ? new Date(patch.lastReadMessageAt) : null;
+    }
     if (patch.unreadCount !== undefined) data.unreadCount = patch.unreadCount;
     if (patch.hidden !== undefined) data.hidden = patch.hidden;
     if (patch.hiddenAt !== undefined) data.hiddenAt = patch.hiddenAt ? new Date(patch.hiddenAt) : null;
@@ -400,6 +420,7 @@ class PrismaConversations implements ConversationRepo {
         conversationId,
         userId,
         lastReadAt: patch.lastReadAt ? new Date(patch.lastReadAt) : null,
+        lastReadMessageAt: patch.lastReadMessageAt ? new Date(patch.lastReadMessageAt) : null,
         unreadCount: patch.unreadCount ?? 0,
         hidden: patch.hidden ?? false,
         hiddenAt: patch.hiddenAt ? new Date(patch.hiddenAt) : null,
@@ -410,25 +431,23 @@ class PrismaConversations implements ConversationRepo {
   }
   async list(params: ListConversationsParams): Promise<Cursor<Conversation>> {
     const p = await db();
+    // The cursor must filter in the database: applying it in memory after
+    // `take` would silently drop conversations past the first page.
+    const cursorFilters = newestFirstCursorFilter(params.cursor, 'lastActivityAt');
+    const where: Record<string, unknown> = {
+      userId: params.userId,
+      hidden: params.includeHidden ? undefined : false,
+    };
+    if (cursorFilters.length > 0) where.conversation = { AND: cursorFilters };
     const memberRows = await p.conversationMember.findMany({
-      where: { userId: params.userId, hidden: params.includeHidden ? undefined : false },
+      where,
       include: { conversation: { include: { members: true } } },
-      orderBy: { conversation: { lastActivityAt: 'desc' } },
+      orderBy: [{ conversation: { lastActivityAt: 'desc' } }, { conversationId: 'asc' }],
       take: params.limit + 1,
     });
     const convs = memberRows.map((m: any) => mapConversation(m.conversation, []));
-    let filtered = convs;
-    if (params.cursor) {
-      const c = decodeCursor(params.cursor);
-      if (c) {
-        filtered = convs.filter((conv: Conversation) => {
-          const ms = new Date(conv.lastActivityAt).getTime();
-          return ms < c.createdAtMs || (ms === c.createdAtMs && conv.id > c.id);
-        });
-      }
-    }
-    const hasMore = filtered.length > params.limit;
-    const page = filtered.slice(0, params.limit);
+    const hasMore = convs.length > params.limit;
+    const page = convs.slice(0, params.limit);
     const nextCursor =
       hasMore && page.length > 0 ? encodeCursor(page[page.length - 1]!.lastActivityAt, page[page.length - 1]!.id) : null;
     return { items: page, nextCursor, hasMore };
@@ -444,7 +463,7 @@ function mapConversation(row: any, _messages: any[]): Conversation {
   for (const m of (row.members ?? []) as any[]) {
     participants[m.userId] = {
       lastReadAt: iso(m.lastReadAt),
-      lastReadMessageAt: null,
+      lastReadMessageAt: iso(m.lastReadMessageAt),
       unreadCount: m.unreadCount,
       hidden: m.hidden,
       hiddenAt: iso(m.hiddenAt),
@@ -573,6 +592,54 @@ function mapCall(row: any): Call {
   };
 }
 
+/**
+ * Delivery state is derived from `MessageReceipt` rows on read (see
+ * `mapMessage`), so `update()` must translate delivery patches back into
+ * receipt upserts — otherwise `markDelivered` silently does nothing.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function syncMessageReceipts(
+  p: any,
+  messageId: string,
+  patch: Partial<Message>,
+): Promise<void> {
+  const readBy = patch.readBy;
+  const reachedDelivered = patch.deliveryState === 'delivered' || patch.deliveryState === 'read';
+  if (!reachedDelivered && !(readBy && readBy.length > 0)) return;
+
+  let recipients = readBy ?? [];
+  if (recipients.length === 0) {
+    // Delivered but not yet read: attribute the receipt to the conversation
+    // peer(s), i.e. every participant except the sender.
+    const msg = await p.message.findUnique({
+      where: { id: messageId },
+      select: { senderId: true, conversation: { select: { participantIds: true } } },
+    });
+    const peers = ((msg?.conversation?.participantIds as string[] | undefined) ?? []).filter(
+      (uid: string) => uid !== msg?.senderId,
+    );
+    recipients = peers;
+  }
+  const deliveredAt = patch.deliveredAt ? new Date(patch.deliveredAt) : new Date();
+  const readAt = patch.readAt ? new Date(patch.readAt) : new Date();
+  for (const uid of recipients) {
+    if (reachedDelivered) {
+      await p.messageReceipt.upsert({
+        where: { messageId_userId_status: { messageId, userId: uid, status: 'delivered' } },
+        update: { deliveredAt },
+        create: { messageId, userId: uid, status: 'delivered', deliveredAt },
+      });
+    }
+  }
+  for (const uid of readBy ?? []) {
+    await p.messageReceipt.upsert({
+      where: { messageId_userId_status: { messageId, userId: uid, status: 'read' } },
+      update: { readAt },
+      create: { messageId, userId: uid, status: 'read', readAt },
+    });
+  }
+}
+
 class PrismaMessages implements MessageRepo {
   async create(message: Message): Promise<Message> {
     const p = await db();
@@ -624,17 +691,15 @@ class PrismaMessages implements MessageRepo {
     if (params.before) where.createdAt = { lt: new Date(params.before) };
     if (params.after) where.createdAt = { gt: new Date(params.after) };
     if (params.q) where.text = { contains: params.q, mode: 'insensitive' };
-    const orderBy = params.after ? { createdAt: 'asc' } : { createdAt: 'desc' };
+    const cursorFilters = params.after ? [] : newestFirstCursorFilter(params.cursor, 'createdAt');
+    if (cursorFilters.length > 0) where.AND = cursorFilters;
+    const orderBy = params.after ? { createdAt: 'asc' } : [{ createdAt: 'desc' }, { id: 'asc' }];
     const queryExtra: Record<string, unknown> = {
       where,
       orderBy,
       take: params.limit + 1,
       include: { edits: true, media: true, receipts: true },
     };
-    if (params.cursor && !params.after) {
-      const c = decodeCursor(params.cursor);
-      if (c) Object.assign(queryExtra, { cursor: { createdAt: new Date(c.createdAtMs), id: c.id }, skip: 1 });
-    }
     const rows = await p.message.findMany(queryExtra);
     const hasMore = rows.length > params.limit;
     const page = rows.slice(0, params.limit);
@@ -652,13 +717,28 @@ class PrismaMessages implements MessageRepo {
     if (patch.deleted !== undefined) data.deleted = patch.deleted;
     if (patch.deletedAt !== undefined) data.deletedAt = patch.deletedAt ? new Date(patch.deletedAt) : null;
     if (patch.deletedBy !== undefined) data.deletedBy = patch.deletedBy;
-    if (patch.metadata !== undefined) data.metadata = patch.metadata;
+    if (patch.metadata !== undefined || patch.hiddenForUserIds !== undefined) {
+      // `hiddenForUserIds` (delete-for-me) lives inside the metadata JSON, so
+      // merge rather than replace to keep keys the caller did not send.
+      const existing = await p.message.findUnique({ where: { id: messageId }, select: { metadata: true } });
+      const nextMeta: Record<string, unknown> = { ...((existing?.metadata as Record<string, unknown> | null) ?? {}) };
+      if (patch.metadata !== undefined) Object.assign(nextMeta, patch.metadata);
+      if (patch.hiddenForUserIds !== undefined) nextMeta.hiddenForUserIds = patch.hiddenForUserIds;
+      data.metadata = nextMeta;
+    }
     if (patch.editHistory && patch.editHistory.length > 0) {
       const latest = patch.editHistory[patch.editHistory.length - 1]!;
-      data.edits = { create: { actorId: latest.editedBy, previousText: latest.previousText } };
+      data.edits = {
+        create: { actorId: latest.editedBy, previousText: latest.previousText, newText: patch.text ?? '' },
+      };
     }
     const row = await p.message.update({ where: { id: messageId }, data, include: { edits: true, media: true, receipts: true } });
-    return mapMessage(row);
+    await syncMessageReceipts(p, messageId, patch);
+    const withReceipts = await p.message.findUnique({
+      where: { id: messageId },
+      include: { edits: true, media: true, receipts: true },
+    });
+    return withReceipts ? mapMessage(withReceipts) : mapMessage(row);
   }
   async countForConversation(conversationId: string): Promise<number> {
     const p = await db();
@@ -698,7 +778,7 @@ class PrismaMedia implements MediaRepo {
       data: {
         id: media.id,
         ownerId: media.ownerId,
-        conversationId: media.conversationId!,
+        conversationId: media.conversationId,
         messageId: media.messageId,
         objectKey: media.storagePath,
         bucket: process.env.STORAGE_BUCKET ?? 'keypad-media',
@@ -727,8 +807,11 @@ class PrismaMedia implements MediaRepo {
   async update(mediaId: string, patch: Partial<Media>): Promise<Media | null> {
     const p = await db();
     const data: Record<string, unknown> = {};
+    if (patch.conversationId !== undefined) data.conversationId = patch.conversationId;
+    if (patch.storagePath !== undefined) data.objectKey = patch.storagePath;
     if (patch.mimeType !== undefined) data.mimeType = patch.mimeType;
     if (patch.sizeBytes !== undefined) data.sizeBytes = patch.sizeBytes;
+    if (patch.checksum !== undefined) data.sha256 = patch.checksum || null;
     if (patch.viewOnce !== undefined) data.viewOnce = patch.viewOnce;
     if (patch.viewOnceState !== undefined) data.viewOnceState = patch.viewOnceState;
     if (patch.viewedAt !== undefined) data.viewedAt = patch.viewedAt ? new Date(patch.viewedAt) : null;
@@ -738,6 +821,22 @@ class PrismaMedia implements MediaRepo {
     if (patch.messageId !== undefined) data.messageId = patch.messageId;
     if (patch.kind !== undefined) data.kind = patch.kind;
     if ((patch as any).uploadState !== undefined) data.uploadState = (patch as any).uploadState;
+    if (
+      patch.width !== undefined ||
+      patch.height !== undefined ||
+      patch.durationMs !== undefined ||
+      patch.deletedBy !== undefined
+    ) {
+      const existing = await p.mediaObject.findUnique({ where: { id: mediaId }, select: { metadata: true } });
+      const nextMeta: Record<string, unknown> = {
+        ...((existing?.metadata as Record<string, unknown> | null) ?? {}),
+      };
+      if (patch.width !== undefined) nextMeta.width = patch.width;
+      if (patch.height !== undefined) nextMeta.height = patch.height;
+      if (patch.durationMs !== undefined) nextMeta.durationMs = patch.durationMs;
+      if (patch.deletedBy !== undefined) nextMeta.deletedBy = patch.deletedBy;
+      data.metadata = nextMeta;
+    }
     const row = await p.mediaObject.update({ where: { id: mediaId }, data });
     return mapMedia(row);
   }
@@ -747,7 +846,13 @@ class PrismaMedia implements MediaRepo {
     if (!params.includeDeleted) where.deleted = false;
     if (params.kind) where.kind = params.kind;
     if (params.viewOnceOnly) where.viewOnce = true;
-    const rows = await p.mediaObject.findMany({ where, orderBy: { createdAt: 'desc' }, take: params.limit + 1 });
+    const cursorFilters = newestFirstCursorFilter(params.cursor, 'createdAt');
+    if (cursorFilters.length > 0) where.AND = cursorFilters;
+    const rows = await p.mediaObject.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: params.limit + 1,
+    });
     const hasMore = rows.length > params.limit;
     const page = rows.slice(0, params.limit);
     const nextCursor = hasMore && page.length > 0 ? encodeCursor((page[page.length - 1] as any).createdAt.toISOString(), (page[page.length - 1] as any).id) : null;
@@ -842,7 +947,13 @@ class PrismaCalls implements CallRepo {
     const where: Record<string, unknown> = {};
     if (params.conversationId) where.conversationId = params.conversationId;
     if (params.userId) where.OR = [{ initiatorId: params.userId }, { recipientId: params.userId }];
-    const rows = await p.call.findMany({ where, orderBy: { startedAt: 'desc' }, take: params.limit + 1 });
+    const cursorFilters = newestFirstCursorFilter(params.cursor, 'startedAt');
+    if (cursorFilters.length > 0) where.AND = cursorFilters;
+    const rows = await p.call.findMany({
+      where,
+      orderBy: [{ startedAt: 'desc' }, { id: 'asc' }],
+      take: params.limit + 1,
+    });
     const hasMore = rows.length > params.limit;
     const page = rows.slice(0, params.limit);
     const nextCursor = hasMore && page.length > 0 ? encodeCursor((page[page.length - 1] as any).startedAt.toISOString(), (page[page.length - 1] as any).id) : null;
@@ -975,7 +1086,14 @@ class PrismaAudit implements AuditRepo {
     const where: Record<string, unknown> = {};
     if (params.action) where.action = params.action;
     if (params.actorUid) where.actorId = params.actorUid;
-    const rows = await p.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: params.limit + 1, include: { actor: true } });
+    const cursorFilters = newestFirstCursorFilter(params.cursor, 'createdAt');
+    if (cursorFilters.length > 0) where.AND = cursorFilters;
+    const rows = await p.auditLog.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: params.limit + 1,
+      include: { actor: true },
+    });
     const hasMore = rows.length > params.limit;
     const page = rows.slice(0, params.limit);
     const nextCursor = hasMore && page.length > 0 ? encodeCursor((page[page.length - 1] as any).createdAt.toISOString(), (page[page.length - 1] as any).id) : null;

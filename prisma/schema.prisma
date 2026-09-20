@@ -41,7 +41,6 @@ model User {
   typingSessions     TypingSession[]
   presence           UserPresence?
   mediaViewedBy      MediaObject[]  @relation("MediaViewer")
-  outboxCreated      OutboxEvent[]  @relation("OutboxCreator")
 }
 
 model UserSession {
@@ -78,7 +77,6 @@ model Conversation {
   messages   Message[]
   media      MediaObject[]
   calls      Call[]
-  typing     TypingSession[]
 
   @@index([lastActivityAt])
 }
@@ -90,7 +88,7 @@ model ConversationMember {
   conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   lastReadAt       DateTime?
-  lastReadMessageId String?
+  lastReadMessageAt DateTime?
   unreadCount      Int      @default(0)
   hidden           Boolean  @default(false)
   hiddenAt         DateTime?
@@ -173,7 +171,7 @@ model MessageReceipt {
 model MediaObject {
   id              String   @id @default(cuid())
   ownerId         String
-  conversationId  String
+  conversationId  String? // null while the upload is still a draft (not yet sent)
   messageId       String?
   objectKey       String   @unique // random non-guessable key in bucket
   bucket          String
@@ -191,12 +189,14 @@ model MediaObject {
   viewedBy        String?
   deleted         Boolean  @default(false)
   deletedAt       DateTime?
+  // JSON encoded extras (width, height, durationMs, deletedBy)
+  metadata        Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   owner           User         @relation("MediaOwner", fields: [ownerId], references: [id])
   viewer          User?        @relation("MediaViewer", fields: [viewedBy], references: [id])
-  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   messageLinks   MessageMedia[]
 
   @@index([conversationId, createdAt])
@@ -217,28 +217,25 @@ model MessageMedia {
 }
 
 // ---------------------------------------------------------------------------
-// Realtime: outbox pattern
+// Realtime: durable outbox for WebSocket/SSE fan-out.
+//
+// One row per recipient (`enqueueOutbox` in lib/realtime/outbox.ts). The
+// background worker polls `deliveredAt IS NULL` rows and republishes them to
+// the in-process bus; reconnecting clients replay via `listForUser`.
 // ---------------------------------------------------------------------------
 
 model OutboxEvent {
-  id            String   @id @default(cuid())
-  eventType     String
-  aggregateType String
-  aggregateId   String
-  payload       Json
-  published     Boolean  @default(false)
-  publishedAt   DateTime?
-  attempts      Int      @default(0)
-  lastAttemptAt DateTime?
-  lastError     String?
-  createdById   String?
-  createdAt     DateTime @default(now())
+  id          String    @id @default(cuid())
+  userId      String
+  topic       String
+  type        String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  deliveredAt DateTime?
 
-  createdBy     User?    @relation("OutboxCreator", fields: [createdById], references: [id])
-
-  @@index([published, createdAt])
-  @@index([aggregateType, aggregateId])
-  @@index([eventType, createdAt])
+  @@index([userId, createdAt])
+  @@index([deliveredAt, createdAt])
+  @@index([userId, id])
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +282,8 @@ model Call {
   answeredAt     DateTime?
   endedAt        DateTime?
   durationMs     Int?
+  // JSON encoded WebRTC diagnostics (iceState, connectionState, turnUsed)
+  metadata       Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
