@@ -25,6 +25,7 @@ function allowedDevOrigins(): string[] {
     .map((host) => host.trim())
     .filter(Boolean);
   const localNetwork = [
+    '127.0.0.1', // loopback by IP — Next only allows `localhost` by itself
     '192.168.*.*', // typical home/office Wi-Fi
     '10.*.*.*', // typical larger LAN
     '172.*.*.*', // docker/VPN/private ranges

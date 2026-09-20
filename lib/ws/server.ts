@@ -53,6 +53,15 @@ const MAX_SUBSCRIPTIONS = 32;
 const MAX_CATCH_UP = 200;
 
 export interface KeypadWSServer {
+  /** Request path this server answers, e.g. `/api/v1/ws`. */
+  readonly path: string;
+  /**
+   * Completes the handshake for an `upgrade` request on `path`. Callers are
+   * expected to route by path first (see lib/ws/upgrade.ts): a request for any
+   * other path is closed here as a last line of defence, so this must never
+   * be handed a socket that belongs to somebody else — Next.js' dev HMR
+   * socket at `/_next/hmr` in particular.
+   */
   handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void;
   clientsFor(userId: string): number;
   /** How many live sockets a user has — used for presence fan-out and tests. */
@@ -294,6 +303,7 @@ export function createKeypadWSServer(options: { path?: string } = {}): KeypadWSS
   }, HEARTBEAT_MS);
 
   return {
+    path,
     handleUpgrade,
     clientsFor,
     connectedUsers() {

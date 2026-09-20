@@ -139,6 +139,16 @@ Two transports deliver those events:
   standalone `server.ts` precisely so the WebSocket works in development;
   plain `next dev`/`next start` cannot mount the upgrade handler.
 
+`server.ts` is not the only thing answering `upgrade` requests on that port:
+in development Next.js attaches its own listener to the same `http.Server`
+for the HMR socket at `/_next/hmr`. Our listener runs first, so it claims
+`/api/v1/ws` only and must leave `/_next/*` untouched (`lib/ws/upgrade.ts`).
+Closing those sockets ourselves does not error on the server — Next simply
+never gets to complete the handshake — but the browser logs
+`WebSocket connection to 'ws://…/_next/hmr' failed: Connection closed before
+receiving a handshake response`, retries a dozen times, then force-reloads,
+which reads as "the page is stuck on Loading words…".
+
 Typing indicators are the one exception: they are ephemeral by design and never
 touch the database. They ride the same socket (or `POST /conversations/{id}/
 typing` over REST) and expire client-side after a few seconds.

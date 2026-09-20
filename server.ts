@@ -3,14 +3,20 @@
  * server on the same port. Used for production deployments (run via
  * `tsx server.ts`). `next dev` / `next start` still work but WebSocket upgrades
  * won't be handled (clients fall back to SSE).
+ *
+ * Two WebSocket endpoints share this port: the Keypad realtime socket at
+ * `/api/v1/ws`, and — in development — Next.js' own HMR socket at
+ * `/_next/hmr`, which Next serves through an `upgrade` listener it attaches to
+ * this same server on the first request. Only the former is handed to the
+ * Keypad server; see lib/ws/upgrade.ts for why the latter must be left alone.
  */
 // Must be the first import: it exposes AsyncLocalStorage before Next loads.
 import './lib/server/async-local-storage-shim';
 import { createServer } from 'node:http';
 import next from 'next';
 import { parse } from 'node:url';
-import type { Socket } from 'node:net';
 import { createKeypadWSServer } from './lib/ws/server';
+import { createUpgradeListener } from './lib/ws/upgrade';
 import { runOutboxWorker } from './lib/realtime/outbox';
 import { logger } from './lib/logger';
 
@@ -38,9 +44,10 @@ const server = createServer((req, res) => {
   }
 });
 
-server.on('upgrade', (req, socket, head) => {
-  ws.handleUpgrade(req, socket as Socket, head as unknown as Buffer);
-});
+// Registered before Next's own listener (which Next adds lazily), so this runs
+// first for every upgrade: it must only claim `/api/v1/ws` and leave Next's
+// dev sockets untouched, otherwise HMR dies and the page never hydrates.
+server.on('upgrade', createUpgradeListener(ws, { dev }));
 
 server.listen(port, hostname, () => {
   // eslint-disable-next-line no-console
