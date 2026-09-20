@@ -162,7 +162,12 @@ export const useAccessStore = create<AccessState>((set, get) => ({
       // failed one (a typo, a rotated code, a dropped request) leaves the token
       // in hand dead. Clearing it here makes the detector re-attach and the
       // next attempt work without a page reload.
-      set({ loading: false, error: errorMessage(error), challenge: null });
+      const message = errorMessage(error);
+      set({ loading: false, error: message, challenge: null });
+      // Never fail silently: on a phone a silent no-op looks exactly like the
+      // keyboard being ignored, so the user has no way to tell anything went
+      // wrong. The toast says what happened and that retyping is worth trying.
+      useUiStore.getState().pushToast(`${message} — type the sequence again`, 'error');
       void get().startChallenge();
       return false;
     }

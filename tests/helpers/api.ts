@@ -14,6 +14,7 @@ import { resetMemoryStorage } from '@/lib/storage';
 import { resetReportedConfigIssues } from '@/lib/diagnostics';
 import { resetEnvCache } from '@/lib/env';
 import { resetAuthClient } from '@/lib/client/auth-client';
+import { waitForPendingMessageWrites } from '@/lib/services/message-service';
 
 /** A route handler as Next.js exposes it. */
 export type Handler<P = Record<string, string>> = (
@@ -35,6 +36,11 @@ export async function call<T = unknown>(
   request: Request,
   params?: Record<string, string>,
 ): Promise<ApiResult<T>> {
+  // Message persistence is write-behind (delivery is notified first, the
+  // database catches up in the background). Letting in-flight writes settle
+  // before the next request keeps assertions against the database
+  // deterministic without changing what production does.
+  await waitForPendingMessageWrites();
   const response = await handler(request, params ? ({ params } as unknown as { params: never }) : undefined);
   const body = (await response.json()) as ApiResult<T>['body'];
   return { status: response.status, body };

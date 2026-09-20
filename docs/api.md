@@ -216,6 +216,20 @@ data: {"conversationId":"c_1","message":{…},"forUserId":"u_2"}
 The conversation stream is filtered per viewer server side, so one event name
 never leaks another participant's content.
 
+Message events delivered on these streams:
+
+- `message.created` — a new message, pushed to the transport **before** the
+  database write completes (notify-first delivery).
+- `message.updated` — an edit.
+- `message.deleted` — a deletion.
+- `message.retracted` — a delivered message whose storage failed and was rolled
+  back. Recipients remove the bubble; the sender's client marks it retryable.
+  Payload: `{ conversationId, messageId, clientMessageId, senderId, reason,
+  forUserId }`.
+- `message.delivered` / `message.read` — receipts for the sender.
+- `conversation.updated` — the refreshed conversation row (preview, timestamp,
+  unread count) after a send is persisted.
+
 ## WebSocket (standalone server only)
 
 `server.ts` (`npm run serve`) also accepts WebSocket connections at

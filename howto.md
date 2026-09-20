@@ -266,8 +266,9 @@ Then sign in as the `ADMIN_EMAIL` account and change the secret code in
 
 | Command                                    | Purpose                                                 |
 | ------------------------------------------ | ------------------------------------------------------- |
-| `npm run dev`                              | Dev server on `0.0.0.0:3000`                            |
-| `npm run build` / `npm start`              | Production build + serve                                |
+| `npm run dev`                              | Dev server on `0.0.0.0:3000` (Next.js + WebSocket + outbox worker) |
+| `npm run dev:next`                         | Plain Next.js dev server (no WebSocket; SSE fallback)   |
+| `npm run build` / `npm start`              | Production build + serve (Next.js + WebSocket + outbox worker) |
 | `npm run serve`                            | Standalone server (Next.js + WebSocket + outbox worker) |
 | `npm run worker`                           | Outbox worker as its own process                        |
 | `npm run test`                             | Unit + API tests (Vitest, memory providers)             |

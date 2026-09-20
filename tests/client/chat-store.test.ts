@@ -158,6 +158,13 @@ function installFetch() {
         return respond(200, { ok: true, data: { items: serverMessages, nextCursor: null, hasMore: false } });
       }
 
+      if (url.pathname === '/api/v1/conversations' && (init?.method ?? 'GET') === 'GET') {
+        return respond(200, {
+          ok: true,
+          data: { items: [conversationView()], nextCursor: null, hasMore: false },
+        });
+      }
+
       if (url.pathname === `/api/v1/conversations/${CID}` && (init?.method ?? 'GET') === 'GET') {
         return respond(200, { ok: true, data: { conversation: conversationView(), iceServers: [], activeCall: null } });
       }
@@ -402,5 +409,154 @@ describe('chat store message synchronisation', () => {
     useChatStore.getState().setTyping(CID, true);
     useChatStore.getState().leaveConversation();
     expect(realtime.sent.some((s) => !s.isTyping)).toBe(true);
+  });
+});
+
+describe('retraction and live conversation updates', () => {
+  beforeEach(() => {
+    realtime.reset();
+    serverMessages = [];
+    requestLog = [];
+    sendShouldFail = false;
+    sendDelayMs = 0;
+    installFetch();
+    setAuthTokenProvider(async () => null);
+    useAuthStore.setState({ user: { id: ME } as never, initializing: false, error: null, pending: false });
+    useUiStore.setState({ toasts: [] });
+    resetChatStore();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetChatStore();
+  });
+
+  it('marks our own message failed when the server retracts it', async () => {
+    await useChatStore.getState().openConversation(CID);
+    await useChatStore.getState().sendText(CID, 'will be retracted');
+    const sent = (useChatStore.getState().messages[CID] ?? [])[0]!;
+    expect(sent.deliveryState).toBe('sent');
+
+    realtime.emit(CID, {
+      id: 'evt_retract_1',
+      topic: `conversation:${CID}:messages`,
+      type: 'message.retracted',
+      payload: {
+        conversationId: CID,
+        messageId: sent.id,
+        clientMessageId: sent.clientMessageId,
+        senderId: ME,
+        reason: 'storage_failed',
+        forUserId: ME,
+      },
+    });
+
+    const list = useChatStore.getState().messages[CID] ?? [];
+    // Kept on screen so it can be retried — never silently dropped.
+    expect(list).toHaveLength(1);
+    expect(list[0]?.deliveryState).toBe('failed');
+    expect(list[0]?.text).toBe('will be retracted');
+    expect(useUiStore.getState().toasts.length).toBeGreaterThan(0);
+  });
+
+  it('removes the peer message when the server retracts it', async () => {
+    await useChatStore.getState().openConversation(CID);
+    realtime.emit(CID, {
+      id: 'evt_peer_retracted',
+      topic: `conversation:${CID}:messages`,
+      type: 'message.created',
+      payload: {
+        conversationId: CID,
+        message: serverMessage('m_ghost', { senderId: PEER, text: 'boo' }),
+        forUserId: ME,
+      },
+    });
+    expect(useChatStore.getState().messages[CID]).toHaveLength(1);
+
+    realtime.emit(CID, {
+      id: 'evt_retract_2',
+      topic: `conversation:${CID}:messages`,
+      type: 'message.retracted',
+      payload: {
+        conversationId: CID,
+        messageId: 'm_ghost',
+        clientMessageId: null,
+        senderId: PEER,
+        reason: 'storage_failed',
+        forUserId: ME,
+      },
+    });
+    expect(useChatStore.getState().messages[CID]).toHaveLength(0);
+  });
+
+  it('updates the conversation list live from conversation.updated', async () => {
+    await useChatStore.getState().loadConversations();
+    expect(useChatStore.getState().conversations).toHaveLength(1);
+    expect(useChatStore.getState().conversations[0]?.conversation.lastMessage).toBeNull();
+
+    const updated = conversationView();
+    updated.conversation.lastMessage = {
+      messageId: 'm_9',
+      text: 'fresh preview',
+      kind: 'text',
+      createdAt: iso(9000),
+    } as never;
+    updated.unreadCount = 3;
+
+    realtime.emit(CID, {
+      id: 'evt_conv',
+      topic: `conversation:${CID}`,
+      type: 'conversation.updated',
+      payload: { conversationId: CID, conversation: updated, forUserId: ME },
+    });
+
+    const list = useChatStore.getState().conversations;
+    expect(list[0]?.conversation.lastMessage).toMatchObject({ text: 'fresh preview' });
+    expect(list[0]?.unreadCount).toBe(3);
+  });
+
+  it('keeps delivering to conversations the user is not looking at', async () => {
+    await useChatStore.getState().loadConversations();
+    // Not opened: the user is on the conversation list.
+
+    realtime.emit(CID, {
+      id: 'evt_background',
+      topic: `conversation:${CID}:messages`,
+      type: 'message.created',
+      payload: {
+        conversationId: CID,
+        message: serverMessage('m_bg', { senderId: PEER, text: 'anyone there?' }),
+        forUserId: ME,
+      },
+    });
+
+    // The unread badge shows immediately…
+    expect(useChatStore.getState().conversations[0]?.unreadCount).toBe(1);
+    // …the peer message is still receipted so the sender sees ✓✓…
+    await vi.waitFor(() =>
+      expect(
+        requestLog.some((r) => r.path.endsWith('/messages/delivery') && r.body['state'] === 'delivered'),
+      ).toBe(true),
+    );
+    // …and the message waits for when the conversation is opened.
+    expect((useChatStore.getState().messages[CID] ?? []).map((m) => m.id)).toContain('m_bg');
+  });
+
+  it('stays subscribed after leaving a conversation', async () => {
+    await useChatStore.getState().openConversation(CID);
+    useChatStore.getState().leaveConversation();
+
+    realtime.emit(CID, {
+      id: 'evt_after_leave',
+      topic: `conversation:${CID}:messages`,
+      type: 'message.created',
+      payload: {
+        conversationId: CID,
+        message: serverMessage('m_late', { senderId: PEER, text: 'still arrives' }),
+        forUserId: ME,
+      },
+    });
+    expect((useChatStore.getState().messages[CID] ?? []).map((m) => m.id)).toContain('m_late');
   });
 });

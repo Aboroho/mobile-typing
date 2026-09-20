@@ -189,3 +189,29 @@ client-supplied uid (an authentication bypass).
 _Cost_: this server is the credential store, so it must be run and backed up
 like one — TLS everywhere, strong `APP_SECRET`, Postgres credentials that are
 not the dev defaults, and the VPS hardening in `docs/deploy.md`.
+
+## 20. Notify-first message delivery (write-behind persistence)
+
+A sent message is pushed to the live transport the moment it passes
+authorisation — **before** anything is written to the database. Delivery
+latency is the socket latency, full stop; a slow or congested database can no
+longer hold a message hostage.
+
+- Persistence runs write-behind in the same process: message row, media link,
+  conversation summary, then durable outbox rows (the reconnect replay), and
+  finally a `conversation.updated` fan-out that refreshes both conversation
+  lists. `waitForPendingMessageWrites()` lets tests and shutdown wait the
+  background jobs out.
+- The flip side is explicit: if the insert fails, the already-delivered message
+  is **retracted** — every client receives `message.retracted` and removes the
+  bubble (the sender's copy becomes retryable). A delivery never outlives its
+  storage, and a failed insert deletes what it delivered.
+- Idempotency on the hot path is an in-process registry keyed by
+  `(conversationId, senderId, clientMessageId)` — a retry returns the original
+  response without re-delivering, and without a database round-trip. The
+  database unique constraint on the same triple is the cross-process backstop;
+  a duplicate that loses the race is recognised at insert time and dropped.
+- _Trade-off accepted_: a client that disconnects in the short window between
+  the live publish and the outbox write can miss that one event; every other
+  path (reconnect replay, pagination, the REST response) still reconciles it.
+  Speed of delivery was the explicit priority.

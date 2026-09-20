@@ -83,9 +83,10 @@ selected, and warns when no administrator is configured. Production deployment
 
 | Command                                   | Description                                                           |
 | ----------------------------------------- | --------------------------------------------------------------------- |
-| `npm run dev`                             | Start the Next.js dev server (port 3000)                              |
+| `npm run dev`                             | Dev server: Next.js + WebSocket + outbox worker (port 3000)           |
+| `npm run dev:next`                        | Plain Next.js dev server (no WebSocket; clients fall back to SSE)     |
 | `npm run build`                           | Production build                                                      |
-| `npm run start`                           | Serve the production build                                            |
+| `npm run start`                           | Serve the production build: Next.js + WebSocket + outbox worker       |
 | `npm run serve`                           | Standalone server: Next.js + WebSocket + outbox worker in one process |
 | `npm run worker`                          | Standalone outbox worker (for running it as its own process)          |
 | `npm run typecheck`                       | `tsc --noEmit`                                                        |
