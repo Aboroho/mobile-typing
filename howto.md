@@ -37,6 +37,26 @@ Default local providers (safe for development only):
 | `SEED_SECRET_CODE` | `opensesame`  | Type this into the game to reveal sign-in                  |
 | `APP_SECRET`       | (dev default) | Signs access sessions — set a real one for anything shared |
 
+### Trying it from a phone on the same network
+
+`npm run dev` listens on `0.0.0.0`, so open `http://<your-lan-ip>:3000` on the
+phone (both devices on the same Wi-Fi). Local network addresses
+(`192.168.*.*`, `10.*.*.*`, `172.*.*.*`, `169.254.*.*`) and mDNS names
+(`laptop.local`) are accepted by the dev server out of the box — Next.js
+otherwise blocks its HMR/development endpoints for an unknown host, and a
+blocked HMR connection means **the page renders but never becomes
+interactive**: buttons do nothing and the secret code can never be typed in.
+Reaching the dev server through a proxy or a public name? Add that hostname:
+
+```bash
+ALLOWED_DEV_ORIGINS=dev.example.com npm run dev
+```
+
+A plain `http://192.168.x.x:3000` origin is not a _secure context_, so browser
+APIs such as `crypto.subtle` and `getUserMedia` are unavailable there. The app
+covers the unlock (SHA-256 falls back to a bundled implementation), but voice
+messages and audio calls need `https` or `localhost`.
+
 These defaults are **refused in a production build**. No external service is
 needed for anything: sign-up, sign-in and chat all run against the dev server
 itself (passwords verified server-side with Argon2).
@@ -154,22 +174,24 @@ S3-compatible store; needs the `@aws-sdk/*` packages installed).
 
 The app is designed to **degrade safely** instead of crashing the public UI.
 
-| Missing piece                                           | What you see / what happens                                                                                                                                                |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No `.env.local` at all                                  | Dev defaults from `lib/config/server-env.ts` apply. Game and memory providers still work.                                                                                  |
-| Blank optional keys (`ADMIN_UID=`, empty `TURN_*`)      | Treated as unset. Safe to copy `.env.example` as-is.                                                                                                                       |
-| Empty / invalid `APP_SECRET`                            | Server env parse fails on boot / first API call. Set ≥ 16 characters.                                                                                                      |
-| Word list file missing (`public/typing-words/*.txt`)    | Start test still works — a built-in English/Bengali fallback list is used and a small warning is shown.                                                                    |
-| `DATA_PROVIDER=prisma` but Postgres is unreachable      | Server routes that touch the database throw a clear error. Check `DATABASE_URL`, then run `npx prisma migrate dev`. Switch back to `memory` to iterate without a database. |
-| `STORAGE_PROVIDER=s3` without credentials               | Media writes fail with a 500 naming the missing keys (`STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`). Use `memory` locally.                                 |
-| `npm run seed` fails with 429 `RATE_LIMITED`            | Registration is limited to 5 calls / 10 min / IP (`auth:register`). Wait for the window, or restart the dev server to reset the in-memory counters.                        |
-| `npm run seed` refuses to run                           | `ADMIN_EMAIL` or `ADMIN_PASSWORD` is unset, or `NODE_ENV=production`.                                                                                                      |
-| Login fails with `unable to sign in with those details` | Wrong password, unknown email and disabled account all read the same on purpose (no account enumeration). Check the server log for the specific `auth.login_*` line.       |
-| No `ADMIN_UID` / `ADMIN_EMAIL`                          | Admin routes return forbidden; the rest of the app is fine. Run `npm run seed` then set `ADMIN_UID`.                                                                       |
-| No TURN server                                          | Calls may work on the same LAN via STUN; mobile networks usually need TURN.                                                                                                |
-| Fresh database, no secret code configured               | The access config is bootstrapped from `SEED_SECRET_CODE` on first boot (`instrumentation.ts`).                                                                            |
-| Production build with `memory` providers                | **Hard fail** — `assertFallbackAllowed` refuses so you cannot ship insecure defaults.                                                                                      |
-| Forgot password?                                        | Password reset by email is not implemented: the UI reports "not configured". Reset the password out of band (e.g. update the user row) until a mail transport is wired up. |
+| Missing piece                                                                             | What you see / what happens                                                                                                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `.env.local` at all                                                                    | Dev defaults from `lib/config/server-env.ts` apply. Game and memory providers still work.                                                                                                                                                                                                                        |
+| Blank optional keys (`ADMIN_UID=`, empty `TURN_*`)                                        | Treated as unset. Safe to copy `.env.example` as-is.                                                                                                                                                                                                                                                             |
+| Empty / invalid `APP_SECRET`                                                              | Server env parse fails on boot / first API call. Set ≥ 16 characters.                                                                                                                                                                                                                                            |
+| Word list file missing (`public/typing-words/*.txt`)                                      | Start test still works — a built-in English/Bengali fallback list is used and a small warning is shown.                                                                                                                                                                                                          |
+| `DATA_PROVIDER=prisma` but Postgres is unreachable                                        | Server routes that touch the database throw a clear error. Check `DATABASE_URL`, then run `npx prisma migrate dev`. Switch back to `memory` to iterate without a database.                                                                                                                                       |
+| `STORAGE_PROVIDER=s3` without credentials                                                 | Media writes fail with a 500 naming the missing keys (`STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`). Use `memory` locally.                                                                                                                                                                       |
+| `npm run seed` fails with 429 `RATE_LIMITED`                                              | Registration is limited to 5 calls / 10 min / IP (`auth:register`). Wait for the window, or restart the dev server to reset the in-memory counters.                                                                                                                                                              |
+| `npm run seed` refuses to run                                                             | `ADMIN_EMAIL` or `ADMIN_PASSWORD` is unset, or `NODE_ENV=production`.                                                                                                                                                                                                                                            |
+| Login fails with `unable to sign in with those details`                                   | Wrong password, unknown email and disabled account all read the same on purpose (no account enumeration). Check the server log for the specific `auth.login_*` line.                                                                                                                                             |
+| No `ADMIN_UID` / `ADMIN_EMAIL`                                                            | Admin routes return forbidden; the rest of the app is fine. Run `npm run seed` then set `ADMIN_UID`.                                                                                                                                                                                                             |
+| No TURN server                                                                            | Calls may work on the same LAN via STUN; mobile networks usually need TURN.                                                                                                                                                                                                                                      |
+| Phone on the Wi-Fi: page loads, but nothing is clickable and the secret code does nothing | The dev server refused the HMR request from that host (`⚠ Blocked cross-origin request to Next.js dev resource`), so the page never hydrated. Local network addresses and `**.local` names are allowed by default in `next.config.ts`; add others with `ALLOWED_DEV_ORIGINS=my-host` and restart `npm run dev`. |
+| `403 /api/v1/calls/events` repeating in the dev log                                       | A browser is signed in (`mt_session`, two weeks) but has no access session (`mt_access`, thirty minutes). The client waits for the unlock before opening user-scoped streams; reload the page and enter the code to clear an old tab that was opened before this fix.                                            |
+| Fresh database, no secret code configured                                                 | The access config is bootstrapped from `SEED_SECRET_CODE` on first boot (`instrumentation.ts`).                                                                                                                                                                                                                  |
+| Production build with `memory` providers                                                  | **Hard fail** — `assertFallbackAllowed` refuses so you cannot ship insecure defaults.                                                                                                                                                                                                                            |
+| Forgot password?                                                                          | Password reset by email is not implemented: the UI reports "not configured". Reset the password out of band (e.g. update the user row) until a mail transport is wired up.                                                                                                                                       |
 
 ### Quick health check
 

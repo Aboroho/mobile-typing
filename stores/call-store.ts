@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { CallSignalKind, CallView, IceServer } from '@mt/types';
 import { api } from '@/lib/client/api';
 import { connectEventStream } from '@/lib/browser/sse-client';
+import { accessSessionGone } from '@/lib/browser/access-session';
 import { CallManager, type CallClientState } from '@/lib/webrtc/call-manager';
 import { useUiStore } from './ui-store';
 import { errorMessage } from './access-store';
@@ -28,8 +29,11 @@ interface CallState {
 let manager: CallManager | null = null;
 let callStream: (() => void) | null = null;
 /** Latest ICE diagnostics, exposed for the call screen's status line. */
-let diagnostics: { iceState: string | null; connectionState: string | null; turnUsed: boolean } | null =
-  null;
+let diagnostics: {
+  iceState: string | null;
+  connectionState: string | null;
+  turnUsed: boolean;
+} | null = null;
 
 export function getCallDiagnostics(): typeof diagnostics {
   return diagnostics;
@@ -79,6 +83,20 @@ export const useCallStore = create<CallState>((set, get) => ({
         'signal.unmute': (payload) => void handleSignal('unmute', payload),
         'signal.bye': (payload) => void handleSignal('bye', payload),
       },
+      /**
+       * The stream answers 403 `ACCESS_REQUIRED` while this browser has no
+       * access session (the 30 minute window elapsed, or the chat was hidden).
+       * `EventSource` hides the status, so ask the API instead of retrying a
+       * route this browser may not read — and hand the decision back to the app
+       * so the typing game returns.
+       */
+      shouldReconnect: async () => {
+        if (!(await accessSessionGone())) return true;
+        callStream?.();
+        callStream = null;
+        globalThis.dispatchEvent(new CustomEvent('mt:access-required'));
+        return false;
+      },
     });
     return () => callStream?.();
   },
@@ -101,7 +119,14 @@ export const useCallStore = create<CallState>((set, get) => ({
     try {
       const { iceServers } = await api.calls.iceServers();
       await api.calls.accept(incoming.id);
-      set({ incoming: null, iceServers, error: null, muted: false, remoteMuted: false, durationMs: 0 });
+      set({
+        incoming: null,
+        iceServers,
+        error: null,
+        muted: false,
+        remoteMuted: false,
+        durationMs: 0,
+      });
       manager = createManager({ callId: incoming.id, iceServers, isInitiator: false, set, get });
       await manager.prepareIncoming();
     } catch (error) {
@@ -155,7 +180,10 @@ function createManager(deps: ManagerDeps): CallManager {
     iceServers: deps.iceServers,
     isInitiator: deps.isInitiator,
     sendSignal: (kind, payload) =>
-      api.calls.signal(deps.callId, { kind, payload: payload as unknown as Record<string, unknown> }),
+      api.calls.signal(deps.callId, {
+        kind,
+        payload: payload as unknown as Record<string, unknown>,
+      }),
     onState: (state) => deps.set({ state }),
     onRemoteMuted: (remoteMuted) => deps.set({ remoteMuted }),
     onDurationTick: (durationMs) => deps.set({ durationMs }),

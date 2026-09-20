@@ -19,6 +19,14 @@ export const serverEnvSchema = z.object({
   APP_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   NEXT_PUBLIC_APP_URL: z.string().default('http://localhost:3000'),
   PORT: z.coerce.number().int().positive().default(3000),
+  /**
+   * Development only: extra hostnames the dev server may be reached from, read
+   * by `next.config.ts` (see `allowedDevOrigins` there). Local network
+   * addresses and `*.local` names are allowed by default, so this is only
+   * needed for proxies or public names in front of `npm run dev`. Next.js
+   * loads `.env*` before the config file, so the value is visible here.
+   */
+  ALLOWED_DEV_ORIGINS: optionalNonEmpty,
 
   /**
    * `memory` powers local development and tests without a database, `prisma` is
@@ -39,7 +47,11 @@ export const serverEnvSchema = z.object({
   /** Signs session cookies, access sessions and challenge tokens. Must be set in production. */
   APP_SECRET: z.string().min(16).default('dev-only-insecure-secret-change-me-please-32-bytes'),
   SESSION_COOKIE_NAME: z.string().default('mt_session'),
-  SESSION_DURATION_HOURS: z.coerce.number().int().positive().default(24 * 14), // two weeks
+  SESSION_DURATION_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(24 * 14), // two weeks
 
   // --- Admin ---------------------------------------------------------------
   ADMIN_UID: optionalNonEmpty,
@@ -69,13 +81,25 @@ export const serverEnvSchema = z.object({
   /** For STORAGE_PROVIDER=local: directory on disk where files are written. */
   STORAGE_LOCAL_DIR: z.string().default('./.local-storage'),
   /** Max upload size in bytes (default 25 MiB). */
-  STORAGE_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  STORAGE_MAX_UPLOAD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25 * 1024 * 1024),
   /** How long signed upload/download URLs are valid, in seconds. */
   STORAGE_SIGN_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
 
   // --- Media / upload limits ----------------------------------------------
-  MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
-  MAX_VOICE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  MAX_IMAGE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
+  MAX_VOICE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
   MAX_MESSAGE_LENGTH: z.coerce.number().int().positive().default(4000),
 
   // --- Rate limiting ------------------------------------------------------
@@ -105,7 +129,6 @@ export const serverEnvSchema = z.object({
   // --- WebSocket -----------------------------------------------------------
   /** Public URL the browser uses to open the WS connection. */
   NEXT_PUBLIC_WS_URL: optionalNonEmpty,
-
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -135,10 +158,18 @@ export interface IceServerConfig {
  * half configured TURN server makes calls fail in confusing ways.
  */
 export function iceServersFromEnv(env: ServerEnv): IceServerConfig[] {
-  const servers: IceServerConfig[] = [{ urls: env.STUN_SERVER_URL.split(',').map((u) => u.trim()).filter(Boolean) }];
+  const servers: IceServerConfig[] = [
+    {
+      urls: env.STUN_SERVER_URL.split(',')
+        .map((u) => u.trim())
+        .filter(Boolean),
+    },
+  ];
   if (env.TURN_SERVER_URL && env.TURN_SERVER_USERNAME && env.TURN_SERVER_CREDENTIAL) {
     servers.push({
-      urls: env.TURN_SERVER_URL.split(',').map((u) => u.trim()).filter(Boolean),
+      urls: env.TURN_SERVER_URL.split(',')
+        .map((u) => u.trim())
+        .filter(Boolean),
       username: env.TURN_SERVER_USERNAME,
       credential: env.TURN_SERVER_CREDENTIAL,
     });
