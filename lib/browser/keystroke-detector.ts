@@ -36,8 +36,13 @@ const DUPLICATE_WINDOW_MS = 120;
  *
  * Both `keydown` (physical keyboards, works even with no focused field) and
  * `beforeinput` (mobile virtual keyboards, where `keydown.key` is often
- * "Unidentified") are used, with a short duplicate window so a desktop keystroke
- * is only counted once.
+ * "Unidentified" or missing entirely) are used. One physical keystroke on a
+ * desktop keyboard fires *both* events, so a `beforeinput` that repeats a
+ * `keydown` character within a short window is treated as the same keystroke
+ * and counted once. Two `beforeinput` events are never deduplicated against
+ * each other: on a mobile virtual keyboard each tap produces exactly one of
+ * them, so two quick taps of the same key are two distinct characters and
+ * dropping either one breaks codes with repeated letters.
  */
 export function attachKeystrokeDetector(options: KeystrokeDetectorOptions): {
   reset: () => void;
@@ -47,20 +52,19 @@ export function attachKeystrokeDetector(options: KeystrokeDetectorOptions): {
   const ignoreSelector = options.ignoreSelector ?? DEFAULT_IGNORE_SELECTOR;
   const code = options.caseSensitive ? options.code : options.code.toLowerCase();
   let matched = false;
-  let lastHandled = { key: '', at: 0 };
+  // The last character accepted from a `keydown`, so the matching `beforeinput`
+  // of the same physical keystroke can be recognised and skipped.
+  let keydownSeen: { key: string; at: number } | null = null;
 
-  const feed = (key: string): void => {
-    if (matched || key.length !== 1) return;
-    const now = Date.now();
-    if (lastHandled.key === key && now - lastHandled.at < DUPLICATE_WINDOW_MS) return;
-    lastHandled = { key, at: now };
-
+  const feed = (key: string): boolean => {
+    if (matched || key.length !== 1) return false;
     const normalized = options.caseSensitive ? key : key.toLowerCase();
     const result = pushKeystroke(buffer, normalized, code);
     if (result.matched && result.code) {
       matched = true;
       options.onMatch(result.code);
     }
+    return true;
   };
 
   const isIgnored = (target: EventTarget | null): boolean => {
@@ -72,13 +76,33 @@ export function attachKeystrokeDetector(options: KeystrokeDetectorOptions): {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === 'Dead' || event.isComposing) return;
     if (isIgnored(event.target)) return;
-    feed(event.key);
+    if (feed(event.key)) {
+      keydownSeen = { key: event.key.toLowerCase(), at: Date.now() };
+    }
   };
 
   const onBeforeInput = (event: InputEvent) => {
     if (event.inputType !== 'insertText' || !event.data) return;
     if (isIgnored(event.target)) return;
-    feed(event.data);
+    const now = Date.now();
+    // `data` can carry several characters at once (suggestion-bar commits on
+    // some mobile keyboards): feed them one by one so the rolling buffer can
+    // still complete the code.
+    for (let index = 0; index < event.data.length; index += 1) {
+      const char = event.data.charAt(index);
+      if (
+        index === 0 &&
+        keydownSeen &&
+        keydownSeen.key === char.toLowerCase() &&
+        now - keydownSeen.at < DUPLICATE_WINDOW_MS
+      ) {
+        // Same physical keystroke already counted from its `keydown`.
+        keydownSeen = null;
+        continue;
+      }
+      keydownSeen = null;
+      feed(char);
+    }
   };
 
   globalThis.addEventListener('keydown', onKeyDown, { capture: true });
@@ -87,7 +111,7 @@ export function attachKeystrokeDetector(options: KeystrokeDetectorOptions): {
   return {
     reset() {
       matched = false;
-      lastHandled = { key: '', at: 0 };
+      keydownSeen = null;
       resetKeystrokeBuffer(buffer);
     },
     detach() {

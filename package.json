@@ -8,9 +8,11 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "dev": "tsx server.ts",
+    "dev:next": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000",
+    "start": "tsx server.ts",
+    "start:next": "next start -H 0.0.0.0 -p 3000",
     "serve": "tsx server.ts",
     "worker": "tsx lib/workers/outbox-worker.ts",
     "typecheck": "tsc --noEmit",

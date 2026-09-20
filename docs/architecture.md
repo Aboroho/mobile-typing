@@ -103,15 +103,25 @@ INVALID_BODY` with per-field detail.
 Cross-cutting behaviour in middleware order: `proxy.ts` (request id, security
 headers incl. CSP) → route auth → per-endpoint rate limits → service.
 
-**Realtime.** The **outbox is the durable truth**. A mutation writes an
-`OutboxEvent` row (one per recipient) in the same transaction as the data it
-describes, publishes it on the in-process bus (`lib/realtime/bus.ts`), then
-marks the rows delivered. `runOutboxWorker()` (`lib/realtime/outbox.ts`)
-republishes any row still un-delivered after a short grace period, so a failed
-publish is recovered rather than lost. Because every event id is
-time-ordered, a client reconnects with `since: <lastEventId>` and the server
-replays exactly the missed rows. `LISTEN`/`NOTIFY` is only ever a wake-up
-hint — a missed notification delays a delivery by one poll, it never loses one.
+**Realtime.** Delivery is **notify-first**: a sent message is published on the
+in-process bus (`lib/realtime/bus.ts`) the moment it passes authorisation, so
+connected sockets receive it immediately — delivery never waits for a database
+write. Persistence then runs write-behind (`lib/services/message-service.ts`):
+the message row, media link, conversation summary and the durable outbox rows
+are written in the background, followed by a `conversation.updated` fan-out
+that refreshes both conversation lists. If the insert fails, the message that
+was already delivered is **retracted** — every client receives
+`message.retracted` and removes the bubble (the sender keeps it as a retryable
+failure) — so a delivery never outlives its storage.
+
+The **outbox is the durable truth** for everything else. A mutation writes an
+`OutboxEvent` row (one per recipient), publishes it on the bus, then marks the
+rows delivered. `runOutboxWorker()` (`lib/realtime/outbox.ts`) republishes any
+row still un-delivered after a short grace period, so a failed publish is
+recovered rather than lost. Because every event id is time-ordered, a client
+reconnects with `since: <lastEventId>` and the server replays exactly the
+missed rows. `LISTEN`/`NOTIFY` is only ever a wake-up hint — a missed
+notification delays a delivery by one poll, it never loses one.
 
 Two transports deliver those events:
 
@@ -124,8 +134,10 @@ Two transports deliver those events:
   recipient, so one socket can never observe another user's conversation.
 - **SSE** per conversation (`/conversations/{id}/events`) and per user
   (`/calls/events`). The browser client uses this as an automatic fallback when
-  no WebSocket is available, so `next dev` (which cannot mount the upgrade
-  handler) still receives every durable event.
+  no WebSocket is available (for example behind a proxy that strips upgrades),
+  so every durable event still arrives. Note that `npm run dev` boots the
+  standalone `server.ts` precisely so the WebSocket works in development;
+  plain `next dev`/`next start` cannot mount the upgrade handler.
 
 Typing indicators are the one exception: they are ephemeral by design and never
 touch the database. They ride the same socket (or `POST /conversations/{id}/

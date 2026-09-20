@@ -110,6 +110,65 @@ export async function enqueueOutbox(input: OutboxInput): Promise<void> {
   });
 }
 
+/**
+ * Notify-first delivery.
+ *
+ * Publishes to the in-process bus immediately — connected sockets and SSE
+ * streams receive the event in the same tick — without touching the database.
+ * Message delivery must never wait for an insert to commit; durability is the
+ * background writer's job (see `persistOutbox`).
+ */
+export function publishLive(input: {
+  topic: string;
+  type: string;
+  recipients: OutboxRecipient[];
+}): void {
+  for (const recipient of input.recipients) {
+    publish(input.topic, input.type, recipient.payload);
+  }
+}
+
+/**
+ * Writes the durable outbox rows for an event that was already published live,
+ * then marks them delivered so the recovery worker does not republish them.
+ * Returns the ids that were written; failures are logged, never thrown — a
+ * missing replay row only costs a reconnecting client one catch-up event, it
+ * must never take the write path down.
+ */
+export async function persistOutbox(input: {
+  topic: string;
+  type: string;
+  recipients: OutboxRecipient[];
+}): Promise<string[]> {
+  const data = await getData();
+  const now = new Date();
+  const written: string[] = [];
+
+  for (const recipient of input.recipients) {
+    const id = newEventId();
+    try {
+      await data.outbox.enqueue({
+        id,
+        userId: recipient.userId,
+        topic: input.topic,
+        type: input.type,
+        payload: recipient.payload,
+        createdAt: now,
+      });
+      written.push(id);
+    } catch (error) {
+      logger.warn('outbox.enqueue_failed', { type: input.type, error: String(error) });
+    }
+  }
+
+  if (written.length > 0) {
+    await data.outbox.markDelivered(written).catch((error) => {
+      logger.warn('outbox.mark_failed', { error: String(error) });
+    });
+  }
+  return written;
+}
+
 /** Helper: enqueue a conversation event to all current participants. */
 export async function enqueueConversationEvent(
   conversation: { id: string; participantIds: string[] },

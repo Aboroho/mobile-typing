@@ -293,7 +293,7 @@ Expected:
 | Uploads fail with 413                         | Nginx `client_max_body_size` (25m above) and `STORAGE_MAX_UPLOAD_BYTES` must be sized together.                                                             |
 | Admin UI says forbidden                       | `ADMIN_UID`/`ADMIN_EMAIL` does not match the signed-in account. Admin status is derived per request, so fix the env and restart — nothing else to change.   |
 | Calls connect on Wi-Fi but not on mobile data | Missing/broken TURN — see the coturn section above. Check `/api/v1/calls/ice-servers` as an authenticated user.                                             |
-| Realtime events stop after redeploy           | The outbox worker only runs inside `npm run serve` (or the standalone unit). `npm start` serves pages but does not poll the outbox.                         |
+| Realtime events stop after redeploy           | The outbox worker runs inside `npm start` / `npm run serve` (or the standalone unit). Plain `next start` serves pages but does not poll the outbox.         |
 
 ## What still needs to be installed
 

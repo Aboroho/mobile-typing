@@ -119,6 +119,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const result = await api.conversations.list({ limit: 30 });
       set({ conversations: result.items, loadingConversations: false });
+      // Subscribe to every conversation, not just the open one: an incoming
+      // message must arrive instantly no matter which screen the user is on,
+      // and the conversation list (preview, unread badge) stays live too.
+      for (const item of result.items) subscribe(item.conversation.id, set);
     } catch (error) {
       set({ loadingConversations: false });
       useUiStore.getState().pushToast(errorMessage(error), 'error');
@@ -129,6 +133,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const { conversation } = await api.conversations.create(participantId);
       set((state) => ({ conversations: upsertConversation(state.conversations, conversation) }));
+      subscribe(conversation.conversation.id, set);
       return conversation.conversation.id;
     } catch (error) {
       useUiStore.getState().pushToast(errorMessage(error), 'error');
@@ -161,8 +166,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   leaveConversation() {
     const id = get().activeConversationId;
     if (id) {
-      streams.get(id)?.();
-      streams.delete(id);
+      // The live subscription is kept: messages for this conversation must
+      // still arrive instantly (and keep the list fresh) while the user is on
+      // another screen. Only the privacy lock tears subscriptions down.
       // Never leave a "typing…" bubble behind on the peer's screen.
       get().setTyping(id, false);
     }
@@ -385,6 +391,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }));
 
+/**
+ * Receipts messages the peer sent to a conversation the user is not currently
+ * looking at, so the sender still sees them as delivered.
+ */
+async function acknowledgePeerMessages(conversationId: string, messageIds: string[]): Promise<void> {
+  if (messageIds.length === 0) return;
+  try {
+    await api.messages.markDelivered(conversationId, {
+      messageIds: messageIds.slice(0, 100),
+      state: 'delivered',
+    });
+  } catch {
+    // Delivery receipts are best effort; the sender's view stays at "sent".
+  }
+}
+
 /** Auto-stop timers for our own typing indicator, per conversation. */
 const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** How long the peer keeps showing "typing…" after our last keystroke. */
@@ -462,13 +484,69 @@ function apply(conversationId: string, event: RealtimeEventFrame, set: SetState)
       set((state) => withMessages(state, conversationId, (list) => upsertMessage(list, message)));
       // Only react to messages the peer sent; our own copy already came back
       // from the REST response.
-      const peerId = useChatStore.getState().activeConversation?.otherUser.id;
-      if (peerId && message.senderId === peerId) {
-        void useChatStore.getState().acknowledgeDelivery(conversationId);
-        if (useChatStore.getState().activeConversationId === conversationId) {
+      const myId = useAuthStore.getState().user?.id ?? null;
+      if (myId && message.senderId !== myId) {
+        const isActive = useChatStore.getState().activeConversationId === conversationId;
+        if (isActive) {
+          void useChatStore.getState().acknowledgeDelivery(conversationId);
           void useChatStore.getState().markRead(conversationId);
+        } else {
+          // Arrived while the user is somewhere else: receipt it anyway (the
+          // sender deserves their ✓✓) and show the unread badge immediately.
+          void acknowledgePeerMessages(conversationId, [message.id]);
+          set((state) => ({
+            conversations: state.conversations.map((item) =>
+              item.conversation.id === conversationId
+                ? { ...item, unreadCount: item.unreadCount + 1 }
+                : item,
+            ),
+          }));
         }
       }
+      return;
+    }
+    case 'message.retracted': {
+      // The server already delivered this message but its storage failed, so
+      // it is taken back. Recipients lose the bubble entirely; the sender
+      // keeps it in a failed state so they can retry.
+      const messageId = payload.messageId as string | undefined;
+      const clientMessageId = (payload.clientMessageId as string | undefined) ?? null;
+      const senderId = payload.senderId as string | undefined;
+      const myId = useAuthStore.getState().user?.id ?? null;
+      const mine = Boolean(myId && senderId && myId === senderId);
+      set((state) =>
+        withMessages(state, conversationId, (list) => {
+          const isTarget = (message: MessageForUser): boolean =>
+            Boolean((messageId && message.id === messageId) ||
+              (clientMessageId && message.clientMessageId === clientMessageId));
+          if (!list.some(isTarget)) return list;
+          if (mine) {
+            return list.map((message) =>
+              isTarget(message) ? { ...message, deliveryState: 'failed' as const } : message,
+            );
+          }
+          return list.filter((message) => !isTarget(message));
+        }),
+      );
+      if (mine && clientMessageId) {
+        set((state) => ({
+          pendingClientIds: {
+            ...state.pendingClientIds,
+            [conversationId]: (state.pendingClientIds[conversationId] ?? []).filter(
+              (id) => id !== clientMessageId,
+            ),
+          },
+        }));
+        useUiStore
+          .getState()
+          .pushToast('A message could not be saved on the server — it is marked for retry.', 'error');
+      }
+      return;
+    }
+    case 'conversation.updated': {
+      const conversation = payload.conversation as ConversationView | undefined;
+      if (!conversation) return;
+      set((state) => ({ conversations: upsertConversation(state.conversations, conversation) }));
       return;
     }
     case 'message.updated': {

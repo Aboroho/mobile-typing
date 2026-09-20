@@ -5,6 +5,18 @@
  * is Argon2id + cookie sessions; no external services are required.
  */
 import { TextDecoder, TextEncoder } from 'node:util';
+import { afterEach } from 'vitest';
+import { resetMessageWriteBehind } from '@/lib/services/message-service';
+
+/**
+ * Message delivery is notify-first: the socket event goes out immediately and
+ * the database write follows in the background. Waiting for those in-flight
+ * writes after every test keeps the next test's fresh store clean and makes
+ * database assertions deterministic.
+ */
+afterEach(async () => {
+  await resetMessageWriteBehind();
+});
 
 process.env.APP_ENV = 'test';
 (process.env as { NODE_ENV?: string }).NODE_ENV = 'test';

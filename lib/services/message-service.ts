@@ -4,13 +4,15 @@ import {
   canDeleteMessage,
   canEditMessage,
   canMarkDelivered,
+  emptyParticipantState,
   messagePreviewFor,
   nextDeliveryState,
   otherParticipant,
   sanitizeMessageText,
   toMessageForUser,
+  touchConversation,
 } from '@mt/domain';
-import type { CallView, Cursor,
+import type { CallView, Conversation, Cursor,
   DeliveryState,
   Media,
   Message,
@@ -18,9 +20,9 @@ import type { CallView, Cursor,
   MessageType } from '@mt/types';
 import { newId, nowIso } from '@mt/utils';
 import type { SendMessageResponse } from '@mt/api-client';
-import { getData, type UserRecord } from '../data';
+import { getData, isUniqueConstraintError, type UserRecord } from '../data';
 import { topics } from '../realtime/bus';
-import { publishEvent } from '../realtime/outbox';
+import { persistOutbox, publishEvent, publishLive } from '../realtime/outbox';
 import { logger } from '../logger';
 import { getConversationView, requireParticipant } from './conversation-service';
 import { buildMediaView } from './media-view';
@@ -44,6 +46,99 @@ export function isVisibleTo(message: Message, viewerId: string): boolean {
   return true;
 }
 
+/**
+ * Notify-first delivery.
+ *
+ * A sent message is pushed to the live transport (WebSocket / SSE) the moment
+ * it passes authorisation — *before* anything is written to the database — so
+ * the recipient sees it as fast as the socket can carry it. Persistence then
+ * runs as a write-behind job: message row, media link, conversation summary,
+ * durable outbox rows, in that order. The database catching up must never gate
+ * delivery.
+ *
+ * The flip side is handled explicitly too: when the insert fails, the message
+ * that was already delivered is retracted — both clients receive
+ * `message.retracted` and remove (or mark retryable) the bubble — so a
+ * delivery never outlives its storage.
+ *
+ * Idempotency on the hot path comes from an in-process registry keyed by
+ * `(conversationId, senderId, clientMessageId)`: retries return the original
+ * response without re-delivering. The database unique constraint on the same
+ * triple is the backstop across processes; a duplicate that loses the race is
+ * recognised during persistence and dropped instead of delivered twice.
+ */
+const RECENT_SENDS_KEY = '__mt_recent_sends_v1';
+const RECENT_SEND_TTL_MS = 10 * 60_000;
+const RECENT_SEND_LIMIT = 4_000;
+
+interface RecentSend {
+  messageId: string;
+  at: number;
+  /** Resolves to the response; shared by every retry of the same send. */
+  response: Promise<SendMessageResponse>;
+}
+
+type RecentSendMap = Map<string, RecentSend>;
+
+function recentSends(): RecentSendMap {
+  const target = globalThis as unknown as Record<string, RecentSendMap | undefined>;
+  if (!target[RECENT_SENDS_KEY]) target[RECENT_SENDS_KEY] = new Map();
+  return target[RECENT_SENDS_KEY] as RecentSendMap;
+}
+
+function lookupRecentSend(key: string): RecentSend | null {
+  const entry = recentSends().get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > RECENT_SEND_TTL_MS) {
+    recentSends().delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function rememberRecentSend(key: string, entry: RecentSend): void {
+  const map = recentSends();
+  if (map.size >= RECENT_SEND_LIMIT) {
+    const now = Date.now();
+    for (const [candidateKey, candidate] of map) {
+      if (now - candidate.at > RECENT_SEND_TTL_MS) map.delete(candidateKey);
+    }
+    while (map.size >= RECENT_SEND_LIMIT) {
+      // Map iteration order is insertion order — evict the oldest first.
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+  map.set(key, entry);
+}
+
+function forgetRecentSend(key: string): void {
+  recentSends().delete(key);
+}
+
+/** In-flight write-behind jobs, so tests and shutdown can wait them out. */
+const pendingMessageWrites = new Set<Promise<void>>();
+
+/** Resolves once every write-behind persistence job currently in flight has settled. */
+export async function waitForPendingMessageWrites(): Promise<void> {
+  while (pendingMessageWrites.size > 0) {
+    await Promise.allSettled(Array.from(pendingMessageWrites));
+  }
+}
+
+/** Test helper: drops the idempotency registry and waits for in-flight writes. */
+export async function resetMessageWriteBehind(): Promise<void> {
+  await waitForPendingMessageWrites();
+  recentSends().clear();
+}
+
+function trackWriteBehind(job: Promise<void>): void {
+  const tracked = job.catch(() => undefined);
+  pendingMessageWrites.add(tracked);
+  void tracked.finally(() => pendingMessageWrites.delete(tracked));
+}
+
 export async function sendMessage(input: {
   actor: UserRecord;
   conversationId: string;
@@ -60,18 +155,11 @@ export async function sendMessage(input: {
   const conversation = await requireParticipant(input.conversationId, input.actor.id);
   const recipientId = otherParticipant(conversation, input.actor.id);
 
-  // Idempotency: a retry with the same clientMessageId returns the original.
-  const existing = await data.messages.findByClientMessageId({
-    conversationId: input.conversationId,
-    senderId: input.actor.id,
-    clientMessageId: input.clientMessageId,
-  });
-  if (existing) {
-    return {
-      message: toVisibleMessage(existing, input.actor.id),
-      conversation: await getConversationView(conversation, input.actor.id),
-    };
-  }
+  // Idempotency without a database round-trip: a retry with the same
+  // clientMessageId returns the original response and never re-delivers.
+  const registryKey = `${input.conversationId}|${input.actor.id}|${input.clientMessageId}`;
+  const recent = lookupRecentSend(registryKey);
+  if (recent) return recent.response;
 
   const now = nowIso();
   let text: string | null = null;
@@ -141,68 +229,241 @@ export async function sendMessage(input: {
     updatedAt: now,
   };
 
-  const created = await data.messages.create(message);
+  const recipients = [
+    {
+      userId: recipientId,
+      payload: {
+        eventId: message.id,
+        conversationId: input.conversationId,
+        message: toVisibleMessage(message, recipientId),
+        forUserId: recipientId,
+      },
+    },
+    {
+      userId: input.actor.id,
+      payload: {
+        eventId: message.id,
+        conversationId: input.conversationId,
+        message: toVisibleMessage(message, input.actor.id),
+        forUserId: input.actor.id,
+      },
+    },
+  ];
 
-  if (mediaRecord) {
-    // A view-once photo starts at `delivered`, not `sent`: storing the message is
-    // the delivery, because the recipient's client pulls it from the message
-    // stream. Without this the recipient could never claim their single view.
-    await data.media.update(mediaRecord.id, {
-      conversationId: input.conversationId,
-      messageId: created.id,
-      viewOnce: Boolean(input.viewOnce),
-      viewOnceState: input.viewOnce ? 'delivered' : null,
-    });
-  }
+  // Register before any await: a retry racing this send must see the entry the
+  // moment the message exists, or it would deliver a second time.
+  const responsePromise = buildSendResponse(conversation, message, recipientId, input.actor.id);
+  rememberRecentSend(registryKey, { messageId: message.id, at: Date.now(), response: responsePromise });
 
-  const updatedConversation = await data.conversations.update(input.conversationId, {
-    lastMessage: messagePreviewFor(created, recipientId),
-    lastMessageAt: created.createdAt,
-    lastActivityAt: created.createdAt,
-  });
-  if (updatedConversation) {
-    await data.conversations.updateParticipant(input.conversationId, recipientId, {
-      unreadCount: (updatedConversation.participants[recipientId]?.unreadCount ?? 0) + 1,
-      hidden: false,
-      hiddenAt: null,
-    });
-  }
-
-  // Durable fan-out: the outbox rows are written before anything is published,
-  // so a client that reconnects a moment later can replay this event instead of
-  // losing it. Each recipient gets the message rendered for *them*.
-  await publishEvent({
+  // 1) Notify first. Delivery to both participants happens right now, on the
+  //    live transport, and does not wait for a single database write.
+  publishLive({
     topic: topics.messages(input.conversationId),
     type: 'message.created',
-    recipients: [
-      {
-        userId: recipientId,
-        payload: {
-          eventId: created.id,
-          conversationId: input.conversationId,
-          message: toVisibleMessage(created, recipientId),
-          forUserId: recipientId,
-        },
-      },
-      {
-        userId: input.actor.id,
-        payload: {
-          eventId: created.id,
-          conversationId: input.conversationId,
-          message: toVisibleMessage(created, input.actor.id),
-          forUserId: input.actor.id,
-        },
-      },
-    ],
+    recipients,
   });
 
+  // 2) The database catches up in the background. If it cannot, the message
+  //    that was just delivered is retracted on every client.
+  trackWriteBehind(
+    persistSentMessage({
+      message,
+      mediaRecord,
+      conversationId: input.conversationId,
+      actorId: input.actor.id,
+      recipientId,
+      viewOnce: Boolean(input.viewOnce),
+      registryKey,
+      recipients,
+    }),
+  );
+
+  return responsePromise;
+}
+
+/** The REST response for a send; the only awaited part is one summary read. */
+async function buildSendResponse(
+  conversation: Conversation,
+  message: Message,
+  recipientId: string,
+  actorId: string,
+): Promise<SendMessageResponse> {
   return {
-    message: toVisibleMessage(created, input.actor.id),
+    message: toVisibleMessage(message, actorId),
     conversation: await getConversationView(
-      (await data.conversations.getById(input.conversationId)) ?? conversation,
-      input.actor.id,
+      projectConversationAfterSend(conversation, message, recipientId),
+      actorId,
     ),
   };
+}
+
+/** The conversation row as it will look once the send is persisted. */
+function projectConversationAfterSend(
+  conversation: Conversation,
+  message: Message,
+  recipientId: string,
+): Conversation {
+  const state = conversation.participants[recipientId] ?? emptyParticipantState();
+  return touchConversation({
+    ...conversation,
+    lastMessage: messagePreviewFor(message, recipientId),
+    lastMessageAt: message.createdAt,
+    participants: {
+      ...conversation.participants,
+      [recipientId]: { ...state, unreadCount: state.unreadCount + 1, hidden: false, hiddenAt: null },
+    },
+  });
+}
+
+/**
+ * Write-behind persistence for a message that has already been delivered live.
+ *
+ * Order matters: the message row first (it is what catch-up replays and
+ * pagination read), then the media link and the conversation summary, then the
+ * durable outbox rows, and finally a lightweight `conversation.updated` fan-out
+ * so both participants' conversation lists refresh without a round-trip.
+ * Any failure triggers a retraction of the already-delivered message.
+ */
+async function persistSentMessage(job: {
+  message: Message;
+  mediaRecord: Media | null;
+  conversationId: string;
+  actorId: string;
+  recipientId: string;
+  viewOnce: boolean;
+  registryKey: string;
+  recipients: Array<{ userId: string; payload: unknown }>;
+}): Promise<void> {
+  const data = await getData();
+  try {
+    try {
+      await data.messages.create(job.message);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        // A send with the same (conversationId, senderId, clientMessageId)
+        // already has a row — the original delivery stands, this one is a
+        // duplicate that must not be delivered again.
+        logger.info('message.persist_duplicate', {
+          messageId: job.message.id,
+          clientMessageId: job.message.clientMessageId,
+        });
+        return;
+      }
+      throw error;
+    }
+
+    if (job.mediaRecord) {
+      // A view-once photo starts at `delivered`, not `sent`: storing the message
+      // is the delivery, because the recipient's client pulls it from the
+      // message stream. Without this the recipient could never claim their
+      // single view.
+      await data.media.update(job.mediaRecord.id, {
+        conversationId: job.conversationId,
+        messageId: job.message.id,
+        viewOnce: job.viewOnce,
+        viewOnceState: job.viewOnce ? 'delivered' : null,
+      });
+    }
+
+    const updatedConversation = await data.conversations.update(job.conversationId, {
+      lastMessage: messagePreviewFor(job.message, job.recipientId),
+      lastMessageAt: job.message.createdAt,
+      lastActivityAt: job.message.createdAt,
+    });
+    let stored = updatedConversation;
+    if (updatedConversation) {
+      stored =
+        (await data.conversations.updateParticipant(job.conversationId, job.recipientId, {
+          unreadCount: (updatedConversation.participants[job.recipientId]?.unreadCount ?? 0) + 1,
+          hidden: false,
+          hiddenAt: null,
+        })) ?? updatedConversation;
+    }
+
+    // Durability for reconnects: replay rows for the event that was just
+    // published live. Kept after the message write so a replay never points at
+    // a message pagination cannot find.
+    await persistOutbox({
+      topic: topics.messages(job.conversationId),
+      type: 'message.created',
+      recipients: job.recipients,
+    });
+
+    // Refresh both conversation lists live (preview, timestamp, unread badge).
+    if (stored) {
+      for (const userId of stored.participantIds) {
+        const view = await getConversationView(stored, userId);
+        publishLive({
+          topic: topics.conversation(job.conversationId),
+          type: 'conversation.updated',
+          recipients: [
+            {
+              userId,
+              payload: {
+                eventId: `conversation_updated_${job.message.id}_${userId}`,
+                conversationId: job.conversationId,
+                conversation: view,
+                forUserId: userId,
+              },
+            },
+          ],
+        });
+      }
+    }
+  } catch (error) {
+    logger.error('message.persist_failed', {
+      messageId: job.message.id,
+      conversationId: job.conversationId,
+      error: String(error),
+    });
+    await retractDeliveredMessage(job, 'storage_failed');
+  }
+}
+
+/**
+ * Undoes a delivery whose storage failed: any partial write is cleaned up on a
+ * best-effort basis, the idempotency entry is dropped so a retry starts fresh,
+ * and every client that received the message is told to take it back. The
+ * sender's client keeps the bubble in a failed state so it can be retried.
+ */
+async function retractDeliveredMessage(
+  job: { message: Message; conversationId: string; actorId: string; recipientId: string; registryKey: string },
+  reason: string,
+): Promise<void> {
+  forgetRecentSend(job.registryKey);
+  try {
+    const data = await getData();
+    const stored = await data.messages.getById(job.message.id);
+    if (stored && !stored.deleted) {
+      await data.messages.update(job.message.id, {
+        deleted: true,
+        deletedAt: nowIso(),
+        deletedBy: 'system',
+        text: null,
+        hiddenForUserIds: Array.from(new Set([job.actorId, job.recipientId])),
+      });
+    }
+  } catch {
+    // The row may never have been written — that is the failure we are
+    // handling. Nothing left to clean up.
+  }
+
+  publishLive({
+    topic: topics.messages(job.conversationId),
+    type: 'message.retracted',
+    recipients: [job.recipientId, job.actorId].map((userId) => ({
+      userId,
+      payload: {
+        eventId: `retracted_${job.message.id}_${userId}`,
+        conversationId: job.conversationId,
+        messageId: job.message.id,
+        clientMessageId: job.message.clientMessageId,
+        senderId: job.message.senderId,
+        reason,
+        forUserId: userId,
+      },
+    })),
+  });
 }
 
 async function buildReplyReference(conversationId: string, messageId: string) {
