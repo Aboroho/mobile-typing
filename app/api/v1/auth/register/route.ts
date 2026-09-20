@@ -7,17 +7,11 @@ import { enforceRateLimit } from '@/lib/security/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * Creates the application profile for a Firebase account the browser has just
- * signed up, and opens the session. The credential — not the body — decides who
- * is being registered.
- */
 export const POST = routeHandler('/api/v1/auth/register', async (request) => {
   const input = parseWith(registerSchema, await readJson(request));
-  await enforceRateLimit(request, 'auth:register', { limit: 5, windowMs: 10 * 60_000 });
+  await enforceRateLimit(request, 'auth:register', { limit: 5, windowMs: 10 * 60_000, subject: input.email });
 
-  const outcome = await register({ name: input.name, email: input.email, request });
-  // A brand new account only enters the chat if this browser already unlocked.
+  const outcome = await register({ name: input.name, email: input.email, password: input.password, request });
   const access = await accessBindingCookie(request, outcome.user.id);
 
   return applyCookies(

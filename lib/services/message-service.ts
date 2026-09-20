@@ -134,7 +134,8 @@ export async function sendMessage(input: {
     deletedBy: null,
     hiddenForUserIds: [],
     clientMessageId: input.clientMessageId,
-    metadata: blockedByRecipient ? { blockedByRecipient: true } : {},
+    expiresAt: null,
+    metadata: (blockedByRecipient ? { blockedByRecipient: true } : {}) as Message['metadata'],
     createdAt: now,
     updatedAt: now,
   };

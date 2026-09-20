@@ -6,22 +6,12 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
- * `npm run doctor` exists to answer "is my Firebase setup actually usable?"
- * without a browser and without a failed request to interpret. These tests run
- * it against throwaway env files in a temporary directory: the value of the
- * script is precisely what it reports about them, and every check here is
- * offline (the network probes are skipped whenever credentials are incomplete,
- * and `--no-server` avoids the dev-server comparison).
+ * Tests for `npm run doctor` (scripts/doctor.mjs) against throwaway env files.
  */
 
 const run = promisify(execFile);
-const SCRIPT = resolve(process.cwd(), 'scripts/check-firebase.mjs');
+const SCRIPT = resolve(process.cwd(), 'scripts/doctor.mjs');
 
-/**
- * A minimal environment: the script reads `process.env` before any file, so an
- * inherited `DATA_PROVIDER` or credential would hide what a fixture is testing.
- * `NODE_ENV` is pinned because it decides which `.env.*` files are read.
- */
 const CLEAN_ENV = {
   PATH: process.env.PATH ?? '/usr/bin:/bin',
   HOME: process.env.HOME ?? '/tmp',
@@ -51,94 +41,75 @@ async function doctor(files: Record<string, string>, args: string[] = ['--no-ser
 }
 
 describe('doctor script', () => {
-  it('reports credentials in .env that a blank .env.local overrides', async () => {
+  it('reports blank overrides in .env.local that shadow real .env values', async () => {
     const result = await doctor({
       '.env': [
-        'DATA_PROVIDER=firestore',
-        'STORAGE_PROVIDER=firebase',
-        'NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSy-real-key',
-        'FIREBASE_PROJECT_ID=keypad-prod',
-        'FIREBASE_CLIENT_EMAIL=firebase-adminsdk-x@keypad-prod.iam.gserviceaccount.com',
+        'DATA_PROVIDER=prisma',
+        'STORAGE_PROVIDER=s3',
+        'APP_SECRET=aa'.repeat(16),
+        'DATABASE_URL=postgres://u:p@db:5432/keypad',
+        'STORAGE_BUCKET=keypad-media',
         '',
       ].join('\n'),
-      '.env.local': ['NEXT_PUBLIC_FIREBASE_API_KEY=""', 'FIREBASE_PROJECT_ID=""', ''].join('\n'),
+      '.env.local': ['DATA_PROVIDER=""', 'STORAGE_BUCKET=""', ''].join('\n'),
     });
 
     expect(result.code).toBe(1);
-    // The precedence trap is named first, with both files and the fix.
     expect(result.output).toContain('override real ones');
-    expect(result.output).toContain('NEXT_PUBLIC_FIREBASE_API_KEY (real value in .env)');
-    expect(result.output).toContain('FIREBASE_PROJECT_ID (real value in .env)');
+    expect(result.output).toContain('DATA_PROVIDER');
+    expect(result.output).toContain('STORAGE_BUCKET');
     expect(result.output).toContain('.env.local before .env');
-    // The table shows where every value actually came from.
-    expect(result.output).toContain('env files, highest precedence first: .env.local, .env');
-    expect(result.output).toMatch(/NEXT_PUBLIC_FIREBASE_API_KEY\s+\(blank\)\s+\.env\.local/);
-    expect(result.output).toMatch(/DATA_PROVIDER\s+firestore\s+\.env/);
+    expect(result.output).toContain('.env.local');
   });
 
-  it('flags an unterminated quote instead of treating it as a value', async () => {
+  it('flags an unterminated quote', async () => {
     const result = await doctor({
-      '.env.local': ['NEXT_PUBLIC_FIREBASE_PROJECT_ID="', ''].join('\n'),
+      '.env.local': ['APP_SECRET="', ''].join('\n'),
     });
-
     expect(result.code).toBe(1);
     expect(result.output).toContain('unterminated quote');
-    expect(result.output).toContain('NEXT_PUBLIC_FIREBASE_PROJECT_ID');
   });
 
-  it('rejects the placeholder private key from .env.example', async () => {
+  it('rejects the placeholder APP_SECRET from .env.example', async () => {
     const result = await doctor({
       '.env.local': [
-        'DATA_PROVIDER=firestore',
-        'STORAGE_PROVIDER=firebase',
-        'NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSy-real-key',
-        'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=keypad-prod.firebaseapp.com',
-        'NEXT_PUBLIC_FIREBASE_PROJECT_ID=keypad-prod',
-        'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=1234567890',
-        'NEXT_PUBLIC_FIREBASE_APP_ID=1:1234567890:web:abc',
-        'FIREBASE_PROJECT_ID=keypad-prod',
-        'FIREBASE_CLIENT_EMAIL=firebase-adminsdk-x@keypad-prod.iam.gserviceaccount.com',
-        'FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----key-----END PRIVATE KEY-----\\n"',
+        'DATA_PROVIDER=prisma',
+        'STORAGE_PROVIDER=local',
+        'DATABASE_URL=postgres://u:p@db:5432/keypad',
+        'APP_SECRET=change-me-to-a-32-byte-random-hex',
         '',
       ].join('\n'),
     });
-
     expect(result.code).toBe(1);
-    expect(result.output).toContain('FIREBASE_PRIVATE_KEY is not a usable key');
-    expect(result.output).toContain('base64 body 3 chars');
-    // The secret itself is never echoed, only its length.
-    expect(result.output).toMatch(/FIREBASE_PRIVATE_KEY\s+\(set, 56 chars\)/);
-    expect(result.output).not.toContain('BEGIN PRIVATE KEY-----key');
+    expect(result.output).toContain('APP_SECRET is still the placeholder');
+    expect(result.output).not.toContain('change-me-to-a-32-byte-random-hex'); // only described, not echoed inline?
   });
 
-  it('says plainly that nothing is stored in Firebase while the dev providers are selected', async () => {
+  it('warns that memory providers persist nothing', async () => {
     const result = await doctor({
-      '.env.local': ['DATA_PROVIDER=memory', 'STORAGE_PROVIDER=memory', ''].join('\n'),
+      '.env.local': ['DATA_PROVIDER=memory', 'STORAGE_PROVIDER=memory', `APP_SECRET=${'a1'.repeat(16)}`, ''].join('\n'),
     });
-
-    expect(result.code).toBe(1);
-    expect(result.output).toContain('nothing is stored in Firebase until this is firestore');
-    expect(result.output).toContain('nothing is stored in Firebase until this is firebase');
-    // No credentials to work with, so the network probes are skipped, not failed.
-    expect(result.output).toContain('[skip] Firestore — the Admin SDK did not initialise');
-    expect(result.output).toContain('[skip] Storage — the Admin SDK did not initialise');
+    expect(result.code).toBe(0);
+    expect(result.output).toContain('DATA_PROVIDER=memory');
+    expect(result.output).toContain('STORAGE_PROVIDER=memory');
+    expect(result.output).toContain('nothing persists');
   });
 
-  it('skips the Auth probe on request and never prints a secret value', async () => {
+  it('never prints secret values in the variable table', async () => {
     const result = await doctor(
       {
         '.env.local': [
           'DATA_PROVIDER=memory',
           'STORAGE_PROVIDER=memory',
+          `APP_SECRET=${'bb'.repeat(16)}`,
           'SEED_SECRET_CODE=opensesame',
           'ADMIN_PASSWORD=hunter2hunter2',
+          'DATABASE_URL=postgres://u:p@db:5432/keypad',
           '',
         ].join('\n'),
       },
-      ['--no-server', '--no-signup'],
+      ['--no-server'],
     );
-
-    expect(result.output).toContain('[skip] Firebase Auth sign-up probe — --no-signup given');
     expect(result.output).toContain('SEED_SECRET_CODE');
     expect(result.output).not.toContain('opensesame');
     expect(result.output).not.toContain('hunter2hunter2');

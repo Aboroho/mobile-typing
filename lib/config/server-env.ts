@@ -18,67 +18,105 @@ export const serverEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   NEXT_PUBLIC_APP_URL: z.string().default('http://localhost:3000'),
+  PORT: z.coerce.number().int().positive().default(3000),
 
   /**
-   * `memory` powers local development and tests, `firestore` is production.
-   *
-   * There is no equivalent switch for authentication: Firebase Authentication is
-   * the only provider, so `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` and
-   * `FIREBASE_PRIVATE_KEY` are required to sign anybody in.
+   * `memory` powers local development and tests without a database, `prisma` is
+   * the production Postgres backend.
    */
-  DATA_PROVIDER: z.enum(['memory', 'firestore']).default('memory'),
-  STORAGE_PROVIDER: z.enum(['memory', 'firebase']).default('memory'),
+  DATA_PROVIDER: z.enum(['memory', 'prisma']).default('memory'),
+  /**
+   * `memory` stores uploads on the local filesystem (dev only), `local` writes
+   * to a configurable directory on disk, `s3` talks to any S3-compatible object
+   * store (AWS, MinIO, Cloudflare R2, etc.).
+   */
+  STORAGE_PROVIDER: z.enum(['memory', 'local', 's3']).default('memory'),
 
-  FIREBASE_PROJECT_ID: optionalNonEmpty,
-  FIREBASE_CLIENT_EMAIL: optionalNonEmpty,
-  /** Newlines in the private key arrive escaped from most hosting dashboards. */
-  FIREBASE_PRIVATE_KEY: optionalNonEmpty,
-  /** When set, the Admin SDK talks to the local Auth emulator instead of prod. */
-  FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
-  NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: optionalNonEmpty,
+  // --- Postgres / Prisma ---------------------------------------------------
+  DATABASE_URL: z.string().default('postgresql://localhost:5432/mobile_typing?schema=public'),
 
+  // --- Session / auth -------------------------------------------------------
+  /** Signs session cookies, access sessions and challenge tokens. Must be set in production. */
+  APP_SECRET: z.string().min(16).default('dev-only-insecure-secret-change-me-please-32-bytes'),
+  SESSION_COOKIE_NAME: z.string().default('mt_session'),
+  SESSION_DURATION_HOURS: z.coerce.number().int().positive().default(24 * 14), // two weeks
+
+  // --- Admin ---------------------------------------------------------------
   ADMIN_UID: optionalNonEmpty,
   /** Development convenience, resolved server side. Never sent to the client. */
   ADMIN_EMAIL: optionalNonEmpty,
 
-  /** Signs access sessions and challenge tokens. Must be set in production. */
-  APP_SECRET: z.string().min(16).default('dev-only-insecure-secret-change-me'),
-
+  // --- Secret code ---------------------------------------------------------
   SECRET_CODE_MAX_LENGTH: z.coerce.number().int().min(3).max(64).default(SECRET_CODE_MAX_LENGTH),
   /** Bootstrap code used only when no administrator has configured one yet. */
   SEED_SECRET_CODE: z.string().max(SECRET_CODE_MAX_LENGTH).default(DEFAULT_SECRET_CODE),
 
+  // --- WebRTC --------------------------------------------------------------
   STUN_SERVER_URL: z.string().default('stun:stun.l.google.com:19302'),
   TURN_SERVER_URL: optionalNonEmpty,
   TURN_SERVER_USERNAME: optionalNonEmpty,
   TURN_SERVER_CREDENTIAL: optionalNonEmpty,
 
+  // --- Object storage ------------------------------------------------------
+  /** S3-compatible endpoint. Leave blank for real AWS S3. */
+  STORAGE_ENDPOINT: optionalNonEmpty,
+  STORAGE_REGION: z.string().default('us-east-1'),
+  STORAGE_BUCKET: z.string().default('keypad-media'),
+  STORAGE_ACCESS_KEY: optionalNonEmpty,
+  STORAGE_SECRET_KEY: optionalNonEmpty,
+  /** Force path-style URLs (required by MinIO, most local dev setups). */
+  STORAGE_FORCE_PATH_STYLE: booleanish.default(false),
+  /** For STORAGE_PROVIDER=local: directory on disk where files are written. */
+  STORAGE_LOCAL_DIR: z.string().default('./.local-storage'),
+  /** Max upload size in bytes (default 25 MiB). */
+  STORAGE_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  /** How long signed upload/download URLs are valid, in seconds. */
+  STORAGE_SIGN_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+
+  // --- Media / upload limits ----------------------------------------------
+  MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  MAX_VOICE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  MAX_MESSAGE_LENGTH: z.coerce.number().int().positive().default(4000),
+
+  // --- Rate limiting ------------------------------------------------------
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
 
+  // --- Outbox worker ------------------------------------------------------
+  OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().default(100),
+
+  // --- Security / logging -------------------------------------------------
   /** `report` avoids breaking third party integrations while tuning the CSP. */
   CSP_MODE: z.enum(['enforce', 'report', 'off']).default('enforce'),
   ENABLE_SECURITY_HEADERS: booleanish.default(true),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).default('info'),
 
   /**
-   * Whether the game is disguise is shown at all is not sensitive, so a
+   * Whether the typing-game disguise is shown at all is not sensitive, so a
    * single `NEXT_PUBLIC_*` flag drives both the client UI and the server-side
    * access-session requirement (see `requireAccess` in `lib/auth/guard.ts`).
    * Keeping one flag avoids the client and API ever disagreeing about whether
    * a secret-code unlock is required.
    */
   NEXT_PUBLIC_ENABLE_TYPING_GAME: booleanish.default(true),
+
+  // --- WebSocket -----------------------------------------------------------
+  /** Public URL the browser uses to open the WS connection. */
+  NEXT_PUBLIC_WS_URL: optionalNonEmpty,
+
+  // --- Deprecated / removed Firebase vars are accepted but ignored --------
+  /**
+   * Legacy Firebase env vars are intentionally left out of the validated schema
+   * to surface any residual code that still reads them. They are NOT used.
+   */
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
-export function parseServerEnv(env: NodeJS.ProcessEnv = process.env): ServerEnv {
-  const normalized = {
-    ...env,
-    FIREBASE_PRIVATE_KEY: env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  };
-  const parsed = serverEnvSchema.safeParse(normalized);
+export function parseServerEnv(input: NodeJS.ProcessEnv = process.env): ServerEnv {
+  const parsed = serverEnvSchema.safeParse(input);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
     throw new Error(`Invalid environment: ${issues}`);
@@ -88,12 +126,6 @@ export function parseServerEnv(env: NodeJS.ProcessEnv = process.env): ServerEnv 
 
 export function isProduction(env: Pick<ServerEnv, 'NODE_ENV' | 'APP_ENV'>): boolean {
   return env.NODE_ENV === 'production' && env.APP_ENV === 'production';
-}
-
-export function hasFirebaseAdminCredentials(
-  env: Pick<ServerEnv, 'FIREBASE_PROJECT_ID' | 'FIREBASE_CLIENT_EMAIL' | 'FIREBASE_PRIVATE_KEY'>,
-): boolean {
-  return Boolean(env.FIREBASE_PROJECT_ID && env.FIREBASE_CLIENT_EMAIL && env.FIREBASE_PRIVATE_KEY);
 }
 
 export interface IceServerConfig {

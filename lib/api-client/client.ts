@@ -256,8 +256,8 @@ export function createApiClient(init: ApiClientInit = {}) {
       login: (input: LoginInput) =>
         request<AuthResult>('/api/v1/auth/login', { method: 'POST', body: input }),
       logout: () => request<{ loggedOut: boolean }>('/api/v1/auth/logout', { method: 'POST' }),
-      reauthenticate: () =>
-        request<ReauthenticateResult>('/api/v1/auth/reauthenticate', { method: 'POST' }),
+      reauthenticate: (input: { password: string }) =>
+        request<ReauthenticateResult>('/api/v1/auth/reauthenticate', { method: 'POST', body: input }),
       updateProfile: (input: UpdateProfileInput) =>
         request<{ user: SessionUser }>('/api/v1/auth/profile', { method: 'PATCH', body: input }),
     },

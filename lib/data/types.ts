@@ -201,9 +201,63 @@ export interface RateLimitRepo {
   consume(key: string, options: { limit: number; windowMs: number }): Promise<RateLimitResult>;
 }
 
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: Date;
+  lastActiveAt: Date;
+  expiresAt: Date;
+  revokedAt: Date | null;
+}
+
+export interface SessionUserJoin {
+  id: string;
+  email: string;
+  name: string | null;
+  disabled: boolean;
+}
+
+export interface SessionRepo {
+  create(input: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    userAgent: string | null;
+    ip: string | null;
+    createdAt: Date;
+    lastActiveAt: Date;
+    expiresAt: Date;
+  }): Promise<SessionRecord>;
+  findByTokenHash(tokenHash: string): Promise<(SessionRecord & { user: SessionUserJoin }) | null>;
+  touch(id: string, lastActiveAt: Date): Promise<void>;
+  revokeByTokenHash(tokenHash: string): Promise<void>;
+  revokeAllForUser(userId: string): Promise<number>;
+}
+
+export interface OutboxEventRecord {
+  id: string;
+  userId: string;
+  topic: string;
+  type: string;
+  payload: unknown;
+  createdAt: Date;
+  deliveredAt: Date | null;
+}
+
+export interface OutboxRepo {
+  enqueue(input: { id: string; userId: string; topic: string; type: string; payload: unknown; createdAt: Date }): Promise<OutboxEventRecord>;
+  listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]>;
+  markDelivered(ids: string[]): Promise<void>;
+  claimPending(limit: number): Promise<OutboxEventRecord[]>;
+}
+
 export interface DataProvider {
-  readonly name: 'memory' | 'firestore';
+  readonly name: 'memory' | 'prisma' | 'firestore';
   users: UserRepo;
+  sessions: SessionRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
   media: MediaRepo;
@@ -212,4 +266,5 @@ export interface DataProvider {
   audit: AuditRepo;
   typingSessions: TypingSessionRepo;
   rateLimits: RateLimitRepo;
+  outbox: OutboxRepo;
 }

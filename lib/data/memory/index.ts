@@ -29,7 +29,12 @@ import type {
   ListUsersParams,
   MediaRepo,
   MessageRepo,
+  OutboxEventRecord,
+  OutboxRepo,
   RateLimitRepo,
+  SessionRecord,
+  SessionRepo,
+  SessionUserJoin,
   TypingSessionRepo,
   UserRecord,
   UserRepo,
@@ -506,6 +511,71 @@ class MemoryTypingSessions implements TypingSessionRepo {
   }
 }
 
+class MemorySessions implements SessionRepo {
+  private get store() {
+    return getStore().sessions as Map<string, SessionRecord>;
+  }
+
+  async create(input: {
+    id: string; userId: string; tokenHash: string; userAgent: string | null; ip: string | null;
+    createdAt: Date; lastActiveAt: Date; expiresAt: Date;
+  }): Promise<SessionRecord> {
+    const rec: SessionRecord = { ...input, revokedAt: null };
+    this.store.set(rec.id, rec);
+    return { ...rec };
+  }
+
+  async findByTokenHash(tokenHash: string): Promise<(SessionRecord & { user: SessionUserJoin }) | null> {
+    const found = Array.from(this.store.values()).find((s) => s.tokenHash === tokenHash);
+    if (!found) return null;
+    const users = getStore().users as Map<string, UserRecord & { disabled?: boolean }>;
+    const user = users.get(found.userId);
+    if (!user) return null;
+    return { ...found, user: { id: user.id, email: user.email, name: user.name, disabled: user.status === 'disabled' } };
+  }
+
+  async touch(id: string, lastActiveAt: Date): Promise<void> {
+    const s = this.store.get(id);
+    if (s) { s.lastActiveAt = lastActiveAt; }
+  }
+
+  async revokeByTokenHash(tokenHash: string): Promise<void> {
+    const found = Array.from(this.store.values()).find((s) => s.tokenHash === tokenHash);
+    if (found) found.revokedAt = new Date();
+  }
+
+  async revokeAllForUser(userId: string): Promise<number> {
+    let n = 0;
+    for (const s of this.store.values()) {
+      if (s.userId === userId && !s.revokedAt) { s.revokedAt = new Date(); n++; }
+    }
+    return n;
+  }
+}
+
+class MemoryOutbox implements OutboxRepo {
+  private get store() { return getStore().outbox as OutboxEventRecord[]; }
+  async enqueue(input: { id: string; userId: string; topic: string; type: string; payload: unknown; createdAt: Date }): Promise<OutboxEventRecord> {
+    const rec: OutboxEventRecord = { ...input, deliveredAt: null };
+    this.store.push(rec);
+    return rec;
+  }
+  async listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]> {
+    let items = this.store.filter((e) => e.userId === userId);
+    if (afterId) items = items.filter((e) => e.id > afterId);
+    items.sort((a, b) => (a.createdAt.getTime() - b.createdAt.getTime()) || a.id.localeCompare(b.id));
+    return items.slice(0, limit);
+  }
+  async markDelivered(ids: string[]): Promise<void> {
+    const set = new Set(ids);
+    for (const e of this.store) if (set.has(e.id)) e.deliveredAt = new Date();
+  }
+  async claimPending(limit: number): Promise<OutboxEventRecord[]> {
+    const pending = this.store.filter((e) => e.deliveredAt === null).slice(0, limit);
+    return pending;
+  }
+}
+
 class MemoryRateLimits implements RateLimitRepo {
   async consume(key: string, options: { limit: number; windowMs: number }) {
     const buckets = getStore().rateLimits;
@@ -531,6 +601,7 @@ export function createMemoryDataProvider(): DataProvider {
   return {
     name: 'memory',
     users: new MemoryUsers(),
+    sessions: new MemorySessions(),
     conversations: new MemoryConversations(),
     messages: new MemoryMessages(),
     media: new MemoryMedia(),
@@ -539,6 +610,7 @@ export function createMemoryDataProvider(): DataProvider {
     audit: new MemoryAudit(),
     typingSessions: new MemoryTypingSessions(),
     rateLimits: new MemoryRateLimits(),
+    outbox: new MemoryOutbox(),
   };
 }
 

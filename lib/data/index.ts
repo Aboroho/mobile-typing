@@ -13,7 +13,7 @@ let cachedName: string | null = null;
 /**
  * Resolves the persistence backend once per process.
  *
- * `DATA_PROVIDER=firestore` uses Cloud Firestore through the Admin SDK.
+ * `DATA_PROVIDER=prisma` uses PostgreSQL through Prisma (production).
  * `DATA_PROVIDER=memory` (the default for local development and tests) keeps
  * everything in process memory and is refused outright in production, so a
  * misconfigured deployment fails loudly instead of quietly losing data.
@@ -22,9 +22,9 @@ export async function getData(): Promise<DataProvider> {
   const configured = env().DATA_PROVIDER;
   if (cached && cachedName === configured) return cached;
 
-  if (configured === 'firestore') {
-    const { createFirestoreDataProvider } = await import('./firestore/index');
-    cached = createFirestoreDataProvider();
+  if (configured === 'prisma') {
+    const { createPrismaDataProvider } = await import('./prisma');
+    cached = createPrismaDataProvider();
   } else {
     assertFallbackAllowed('in-memory data');
     cached = createMemoryDataProvider();

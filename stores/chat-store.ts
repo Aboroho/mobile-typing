@@ -320,6 +320,7 @@ function optimisticMessage(
     deletedAt: null,
     deletedBy: null,
     clientMessageId,
+    expiresAt: null,
     createdAt: now,
     updatedAt: now,
   };
