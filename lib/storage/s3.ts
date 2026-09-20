@@ -94,8 +94,10 @@ export function createS3StorageProvider(): StorageProvider {
     async createSignedUrl(objectKey, ttlSeconds) {
       const { s3, presigner } = await load();
       const c = await makeClient();
+      // The presigner signs a *command*, not the client: passing the client
+      // here throws at runtime with the real SDK.
       const getCmd = new s3.GetObjectCommand({ Bucket: env().STORAGE_BUCKET, Key: objectKey });
-      return presigner.getSignedUrl(c, { expiresIn: ttlSeconds }) as Promise<string>;
+      return (await presigner.getSignedUrl(c, getCmd, { expiresIn: ttlSeconds })) as string;
     },
     async createSignedUpload(objectKey, ttlSeconds, contentType, maxBytes) {
       const { s3, presigner } = await load();
@@ -106,7 +108,7 @@ export function createS3StorageProvider(): StorageProvider {
         ContentType: contentType,
         ContentLength: maxBytes,
       });
-      const uploadUrl = (await presigner.getSignedUrl(c, { expiresIn: ttlSeconds })) as string;
+      const uploadUrl = (await presigner.getSignedUrl(c, putCmd, { expiresIn: ttlSeconds })) as string;
       return {
         uploadUrl,
         objectKey,

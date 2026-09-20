@@ -27,13 +27,44 @@ import type {
 /**
  * A stored profile.
  *
- * `id` is the application user id (`u_…`). The Argon2 password hash is stored
- * alongside the record by the provider but is never exposed through this
- * interface (see `createUserWithHash` in `lib/services/auth-service.ts`).
+ * `id` is the application user id (`u_…`). The Argon2 password hash lives in
+ * its own column (`User.passwordHash`) and is **never** a field on this
+ * record: every provider maps rows through a projection that omits it, so no
+ * service can accidentally log or return it. Use
+ * {@link UserRepo.getPasswordHash} to verify a password and
+ * {@link UserRepo.createWithPasswordHash} to create an account.
  */
 export interface UserRecord extends UserProfile {
   /** Why an administrator disabled the account, when they gave a reason. */
   disabledReason: string | null;
+}
+
+/**
+ * Thrown by every provider when a uniqueness constraint is violated
+ * (`User.emailNormalized`, `Message.(conversationId, senderId,
+ * clientMessageId)`, …). Callers translate it into an idempotent retry or an
+ * appropriate HTTP status instead of a 500.
+ */
+export class UniqueConstraintError extends Error {
+  constructor(
+    readonly model: string,
+    readonly field: string,
+  ) {
+    super(`unique constraint violated: ${model}.${field}`);
+    this.name = 'UniqueConstraintError';
+  }
+}
+
+/** True for provider errors caused by a uniqueness violation. */
+export function isUniqueConstraintError(error: unknown, field?: string): boolean {
+  if (error instanceof UniqueConstraintError) return field ? error.field === field : true;
+  // Prisma P2002 — matched structurally so this file stays Prisma-free.
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002') {
+    if (!field) return true;
+    const target = (error as { meta?: { target?: unknown } }).meta?.target;
+    return Array.isArray(target) ? target.includes(field) : String(target ?? '').includes(field);
+  }
+  return false;
 }
 
 export interface ListUsersParams {
@@ -45,6 +76,14 @@ export interface ListUsersParams {
 
 export interface UserRepo {
   create(record: UserRecord): Promise<UserRecord>;
+  /**
+   * Creates the account and its Argon2 hash in a single write. Providers must
+   * raise {@link UniqueConstraintError} when the email already exists so the
+   * caller can fall back to a login instead of creating a duplicate account.
+   */
+  createWithPasswordHash(record: UserRecord, passwordHash: string): Promise<UserRecord>;
+  /** Reads only the Argon2 hash column. `null` when the account has none. */
+  getPasswordHash(userId: string): Promise<string | null>;
   getById(userId: string): Promise<UserRecord | null>;
   getByEmail(email: string): Promise<UserRecord | null>;
   update(userId: string, patch: Partial<UserRecord>): Promise<UserRecord | null>;
@@ -253,6 +292,8 @@ export interface OutboxRepo {
   listForUser(userId: string, afterId: string | null, limit: number): Promise<OutboxEventRecord[]>;
   markDelivered(ids: string[]): Promise<void>;
   claimPending(limit: number): Promise<OutboxEventRecord[]>;
+  /** Retention: drops rows older than the cutoff. Returns how many were removed. */
+  pruneOlderThan(cutoff: Date): Promise<number>;
 }
 
 export interface DataProvider {

@@ -1,3 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any --
+ * The generated Prisma client types only exist after `prisma generate`, which
+ * needs the engine binaries. This module deliberately treats the client as
+ * `any` internally so `tsc` and the memory-backed test suite work on a fresh
+ * checkout; the repository interfaces in `lib/data/types.ts` are the typed
+ * boundary everything else programs against.
+ */
 /**
  * Prisma/PostgreSQL DataProvider implementation.
  *
@@ -53,6 +60,7 @@ import type {
   ViewOnceClaim,
 } from '../types';
 import { decodeCursor, encodeCursor } from '../memory/store';
+import { UniqueConstraintError, isUniqueConstraintError } from '../types';
 
 function iso(date: Date | null | undefined): Timestamp | null {
   if (!date) return null;
@@ -92,13 +100,28 @@ function newestFirstCursorFilter(
 }
 
 // Lazy load prisma client.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _prisma: any = null;
 async function db(): Promise<any> {
   if (_prisma) return _prisma;
   const { getPrisma } = await import('../../prisma');
   _prisma = await getPrisma();
   return _prisma;
+}
+
+/**
+ * Translates Prisma's P2002 ("unique constraint failed") into the provider
+ * level {@link UniqueConstraintError}, so callers can react idempotently
+ * (retry as a login, return the existing row) instead of surfacing a 500.
+ */
+function wrapUnique(model: string) {
+  return (error: unknown): never => {
+    if (isUniqueConstraintError(error)) {
+      const target = (error as { meta?: { target?: unknown } }).meta?.target;
+      const field = Array.isArray(target) ? target.join('.') : String(target ?? 'unique');
+      throw new UniqueConstraintError(model, field);
+    }
+    throw error;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +252,33 @@ class PrismaUsers implements UserRepo {
         disabledReason: record.disabledReason,
         lastLoginAt: record.lastLoginAt ? new Date(record.lastLoginAt) : null,
       },
-    });
+    }).catch(wrapUnique('User'));
     return mapUser(created);
+  }
+
+  async createWithPasswordHash(record: UserRecord, passwordHash: string): Promise<UserRecord> {
+    const p = await db();
+    const created = await p.user.create({
+      data: {
+        id: record.id,
+        name: record.name,
+        email: record.email,
+        emailNormalized: record.email.toLowerCase(),
+        passwordHash,
+        photoUrl: record.photoUrl,
+        status: record.status,
+        disabledReason: record.disabledReason,
+        lastLoginAt: record.lastLoginAt ? new Date(record.lastLoginAt) : null,
+      },
+    }).catch(wrapUnique('User'));
+    return mapUser(created);
+  }
+
+  async getPasswordHash(userId: string): Promise<string | null> {
+    const p = await db();
+    const row = await p.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+    const hash = (row as { passwordHash?: string | null } | null)?.passwordHash;
+    return hash ? hash : null;
   }
 
   async getById(userId: string): Promise<UserRecord | null> {
@@ -597,7 +645,6 @@ function mapCall(row: any): Call {
  * `mapMessage`), so `update()` must translate delivery patches back into
  * receipt upserts — otherwise `markDelivered` silently does nothing.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function syncMessageReceipts(
   p: any,
   messageId: string,
@@ -662,7 +709,7 @@ class PrismaMessages implements MessageRepo {
         expiresAt: message.expiresAt ? new Date(message.expiresAt) : null,
       },
       include: { edits: true, media: true, receipts: true },
-    });
+    }).catch(wrapUnique('Message'));
     return mapMessage(created);
   }
   async getById(messageId: string): Promise<Message | null> {
@@ -1185,6 +1232,11 @@ class PrismaOutbox implements OutboxRepo {
     const p = await db();
     const rows = await p.outboxEvent.findMany({ where: { deliveredAt: null }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limit });
     return (rows as any[]).map((r) => ({ id: r.id, userId: r.userId, topic: r.topic, type: r.type, payload: r.payload, createdAt: r.createdAt, deliveredAt: r.deliveredAt }));
+  }
+  async pruneOlderThan(cutoff: Date): Promise<number> {
+    const p = await db();
+    const result = await p.outboxEvent.deleteMany({ where: { createdAt: { lt: cutoff } } });
+    return result.count as number;
   }
 }
 

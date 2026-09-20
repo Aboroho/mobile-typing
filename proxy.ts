@@ -20,8 +20,12 @@ import { NextResponse, type NextRequest } from 'next/server';
  * scripts automatically, so no other code has to know about it.
  * See: https://nextjs.org/docs/app/guides/content-security-policy
  */
-function buildCsp(nonce: string): string {
+function buildCsp(nonce: string, origin: string | null): string {
   const isDev = process.env.NODE_ENV === 'development';
+  // `connect-src 'self'` covers http(s) to this origin. WebSocket upgrades need
+  // the ws/wss scheme spelled out for the *same* host, otherwise the realtime
+  // socket is blocked by CSP and silently falls back to SSE.
+  const wsSources = origin ? ` ${origin.replace(/^http/, 'ws')}` : '';
   return [
     "default-src 'self'",
     // 'strict-dynamic' lets the nonce-bearing framework scripts load whatever
@@ -31,7 +35,7 @@ function buildCsp(nonce: string): string {
     "img-src 'self' data: blob:",
     "media-src 'self' blob: mediastream:",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    `connect-src 'self'${wsSources}`,
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -42,6 +46,7 @@ function buildCsp(nonce: string): string {
 export function proxy(request: NextRequest) {
   const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+  const origin = request.nextUrl?.origin ?? null;
 
   // The nonce must reach Next's own renderer via the *request* headers (so it
   // can stamp framework scripts with it), not just the response.
@@ -69,7 +74,7 @@ export function proxy(request: NextRequest) {
   const cspMode = process.env.CSP_MODE ?? 'enforce';
   if (cspMode === 'off') return response;
 
-  const csp = buildCsp(nonce);
+  const csp = buildCsp(nonce, origin);
   const headerName =
     cspMode === 'report' ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy';
   response.headers.set(headerName, csp);

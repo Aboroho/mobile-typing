@@ -2,11 +2,10 @@
  * Session-cookie helpers. Thin wrappers around our database-backed session
  * module plus the access-session JWT cookie (mt_access).
  */
-import { NextResponse } from 'next/server';
+import type { NextResponse } from 'next/server';
 import { createSession, clearSessionCookie, verifySession, revokeSessionByToken, type CookieInstruction } from './session';
 import { issueSessionForUser, verifyAccessSession } from '../access/access-service';
-import { getData } from '../data';
-import { ACCESS_COOKIE, SESSION_COOKIE } from './types';
+import { ACCESS_COOKIE } from './types';
 
 export interface EstablishedSession {
   verified: { uid: string; email: string; displayName: string | null; authTime: number; isAdminClaim: boolean; source: 'session-cookie' };
@@ -107,7 +106,3 @@ function readCookie(header: string, name: string): string | null {
   }
   return null;
 }
-
-// Ensures unused import is referenced (getData is used implicitly by other services).
-void getData;
-void SESSION_COOKIE;

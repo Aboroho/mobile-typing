@@ -37,6 +37,12 @@ export interface SessionUser {
 export interface AuthResult {
   user: SessionUser;
   /**
+   * `true` when this request created the account (HTTP 201), `false` when the
+   * email was already registered and the server re-issued a session instead
+   * (HTTP 200). Both are success; only `created` differs.
+   */
+  created?: boolean;
+  /**
    * Always `null`. The session credential is the httpOnly `mt_session`
    * cookie set by the response — it is never returned in a body.
    */

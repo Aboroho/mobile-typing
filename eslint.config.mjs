@@ -48,6 +48,7 @@ const config = [
       '**/*.test.{ts,tsx}',
       'e2e/**/*.ts',
       'scripts/**/*.mjs',
+      'scripts/**/*.ts',
       'vitest.setup.ts',
     ],
     rules: {

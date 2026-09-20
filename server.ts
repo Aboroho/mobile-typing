@@ -4,9 +4,12 @@
  * `tsx server.ts`). `next dev` / `next start` still work but WebSocket upgrades
  * won't be handled (clients fall back to SSE).
  */
+// Must be the first import: it exposes AsyncLocalStorage before Next loads.
+import './lib/server/async-local-storage-shim';
 import { createServer } from 'node:http';
 import next from 'next';
 import { parse } from 'node:url';
+import type { Socket } from 'node:net';
 import { createKeypadWSServer } from './lib/ws/server';
 import { runOutboxWorker } from './lib/realtime/outbox';
 import { logger } from './lib/logger';
@@ -36,7 +39,7 @@ const server = createServer((req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
-  ws.handleUpgrade(req, socket as unknown as import('node:net').Socket, head as unknown as Buffer);
+  ws.handleUpgrade(req, socket as Socket, head as unknown as Buffer);
 });
 
 server.listen(port, hostname, () => {

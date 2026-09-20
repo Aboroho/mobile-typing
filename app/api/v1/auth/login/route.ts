@@ -22,6 +22,7 @@ export const POST = routeHandler('/api/v1/auth/login', async (request) => {
       token: outcome.token,
       cookieSession: outcome.cookieSession,
       accessGranted: Boolean(access),
+      created: false,
     }),
     [...(outcome.session ? [outcome.session] : []), ...(access ? [access] : [])],
   );

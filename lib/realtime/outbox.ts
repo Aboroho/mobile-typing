@@ -1,17 +1,17 @@
-/**
- * Durable outbox for WebSocket/SSE fan-out.
- *
- * Services publish events through `enqueueOutbox()`, which writes a row per
- * recipient to the OutboxEvent table (or memory array). The background worker
- * (`runOutboxWorker`) polls for pending rows and republishes them to the
- * in-process event bus, delivering to connected WebSocket clients and ensuring
- * reconnecting clients can replay anything they missed.
- */
-import { newId } from '@mt/utils';
-import { getData } from '../data';
-import type { OutboxEventRecord } from '../data/types';
+import type { RealtimeEvent } from './bus';
 import { publish, topics } from '../realtime/bus';
+import { getData } from '../data';
 import { logger } from '../logger';
+
+export interface OutboxRecipient {
+  userId: string;
+  /**
+   * The payload *this* recipient is allowed to see. Messages are rendered per
+   * viewer (media permissions, blocked senders, read receipts), so the durable
+   * row stores the tailored copy rather than one shared blob.
+   */
+  payload: unknown;
+}
 
 export interface OutboxInput {
   /** User ids that should receive the event. */
@@ -21,24 +21,93 @@ export interface OutboxInput {
   payload: unknown;
 }
 
-export async function enqueueOutbox(input: OutboxInput): Promise<void> {
+export interface PublishEventInput {
+  topic: string;
+  type: string;
+  recipients: OutboxRecipient[];
+}
+
+/**
+ * Time-ordered, collision-resistant event ids.
+ *
+ * The reconnect cursor is `WHERE id > :afterId ORDER BY createdAt, id`, so the
+ * id itself has to sort in creation order — a purely random id would silently
+ * skip events on catch-up. Format: `evt_<ms base36>_<seq>_<rand>`.
+ */
+let sequence = 0;
+let lastMs = 0;
+export function newEventId(): string {
+  const now = Date.now();
+  if (now === lastMs) sequence += 1;
+  else {
+    lastMs = now;
+    sequence = 0;
+  }
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `evt_${now.toString(36).padStart(9, '0')}_${sequence.toString(36).padStart(4, '0')}_${rand}`;
+}
+
+/**
+ * The durable fan-out path.
+ *
+ * 1. one `OutboxEvent` row per recipient is written first — that is the record
+ *    a reconnecting client replays from, and it survives a restart, a crash
+ *    between the write and the publish, and a deployment;
+ * 2. the event is then published on the in-process bus for sockets that are
+ *    already connected;
+ * 3. the rows are marked delivered so the worker does not publish them a second
+ *    time. Rows that never got marked (crash, or written by another process)
+ *    stay pending and the worker republishes them.
+ *
+ * PostgreSQL stays the source of truth: a successful WebSocket send is never
+ * treated as proof the transaction committed, and a failed publish never rolls
+ * the calling transaction back.
+ */
+export async function publishEvent(input: PublishEventInput): Promise<void> {
   const data = await getData();
   const now = new Date();
-  const idBase = newId('evt');
-  let idx = 0;
-  for (const uid of input.recipientUserIds) {
-    const id = `${idBase}_${idx++}`;
-    await data.outbox.enqueue({
-      id,
-      userId: uid,
-      topic: input.topic,
-      type: input.type,
-      payload: input.payload,
-      createdAt: now,
+  const written: string[] = [];
+
+  for (const recipient of input.recipients) {
+    const id = newEventId();
+    try {
+      await data.outbox.enqueue({
+        id,
+        userId: recipient.userId,
+        topic: input.topic,
+        type: input.type,
+        payload: recipient.payload,
+        createdAt: now,
+      });
+      written.push(id);
+    } catch (error) {
+      // A full outbox must not break the write that produced the event; the
+      // client still reconciles from REST on the next fetch.
+      logger.warn('outbox.enqueue_failed', { type: input.type, error: String(error) });
+    }
+  }
+
+  // One publish per distinct payload. Every subscriber filters by recipient
+  // (see `eventAddressedTo`), so publishing a tailored copy per recipient is
+  // what keeps private fields out of the other participant's stream.
+  for (const recipient of input.recipients) {
+    publish(input.topic, input.type, recipient.payload);
+  }
+
+  if (written.length > 0) {
+    await data.outbox.markDelivered(written).catch((error) => {
+      logger.warn('outbox.mark_failed', { error: String(error) });
     });
   }
-  // Immediately publish in-process for any connected sockets on this node.
-  publish(input.topic, input.type, input.payload);
+}
+
+/** Convenience wrapper: same payload for every recipient. */
+export async function enqueueOutbox(input: OutboxInput): Promise<void> {
+  await publishEvent({
+    topic: input.topic,
+    type: input.type,
+    recipients: input.recipientUserIds.map((userId) => ({ userId, payload: input.payload })),
+  });
 }
 
 /** Helper: enqueue a conversation event to all current participants. */
@@ -60,28 +129,41 @@ export interface OutboxWorker {
 }
 
 /**
- * Starts a polling loop that claims pending outbox rows and republishes them.
- * In multi-instance deployments, every instance polls; OutboxEvent rows are
- * marked delivered when any subscriber has received them (single-node VPS
- * model). For multi-DC, replace the in-process bus with Redis Streams or
- * Postgres LISTEN/NOTIFY.
+ * Republishes outbox rows that were never marked delivered, so events survive a
+ * restart or a publish failure. Rows younger than `graceMs` are left alone:
+ * those are in flight inside `publishEvent`, which marks them itself, and
+ * claiming them here would deliver the same event twice.
  */
-export function runOutboxWorker(options: { pollMs?: number; batchSize?: number } = {}): OutboxWorker {
+export function runOutboxWorker(
+  options: { pollMs?: number; batchSize?: number; graceMs?: number; retentionDays?: number } = {},
+): OutboxWorker {
   const pollMs = options.pollMs ?? 500;
   const batchSize = options.batchSize ?? 200;
+  const graceMs = options.graceMs ?? 2_000;
+  const retentionDays = options.retentionDays ?? 7;
   let stopped = false;
   let inFlight: Promise<void> = Promise.resolve();
+  let lastPrune = 0;
 
   async function tick() {
     try {
       const data = await getData();
-      const pending: OutboxEventRecord[] = await data.outbox.claimPending(batchSize);
-      if (pending.length === 0) return;
-      for (const evt of pending) {
+      const pending = await data.outbox.claimPending(batchSize);
+      const stale = pending.filter((event) => Date.now() - event.createdAt.getTime() > graceMs);
+      for (const evt of stale) {
         publish(evt.topic, evt.type, evt.payload);
       }
-      await data.outbox.markDelivered(pending.map((e) => e.id));
-      logger.debug('outbox.delivered', { count: pending.length });
+      if (stale.length > 0) {
+        await data.outbox.markDelivered(stale.map((e) => e.id));
+        logger.info('outbox.recovered', { count: stale.length });
+      }
+      const now = Date.now();
+      if (now - lastPrune > 60 * 60 * 1000) {
+        lastPrune = now;
+        const cutoff = new Date(now - retentionDays * 24 * 60 * 60 * 1000);
+        const pruned = await data.outbox.pruneOlderThan(cutoff).catch(() => 0);
+        if (pruned > 0) logger.info('outbox.pruned', { count: pruned });
+      }
     } catch (err) {
       logger.warn('outbox.tick_failed', { error: String(err) });
     }
@@ -105,3 +187,5 @@ export function runOutboxWorker(options: { pollMs?: number; batchSize?: number }
     },
   };
 }
+
+export type { RealtimeEvent };

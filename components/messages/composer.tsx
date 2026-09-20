@@ -23,7 +23,6 @@ export function Composer({
   const [text, setText] = useState('');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [viewOnce, setViewOnce] = useState(false);
-  const typingRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const sendText = useChatStore((state) => state.sendText);
@@ -32,25 +31,26 @@ export function Composer({
   const upload = useMediaUpload();
   const recorder = useVoiceRecorder();
 
+  // Leaving the conversation (or unmounting) always clears the indicator, so
+  // the peer never sees a stuck "typing…".
   useEffect(() => {
     return () => setTyping(conversationId, false);
   }, [conversationId, setTyping]);
 
-  const notifyTyping = () => {
-    if (typingRef.current) return;
-    typingRef.current = true;
-    setTyping(conversationId, true);
-    setTimeout(() => {
-      typingRef.current = false;
-      setTyping(conversationId, false);
-    }, 2500);
-  };
+  /**
+   * Typing signal. The store debounces it: the first keystroke goes out
+   * immediately, later keystrokes only push the automatic stop further out,
+   * and the composer never has to schedule its own timer.
+   */
+  const notifyTyping = () => setTyping(conversationId, true);
 
   const submit = async () => {
     const value = text.trim();
     if (!value) return;
     setText('');
     onClearReply();
+    // Sending is the definitive "not typing any more".
+    setTyping(conversationId, false);
     await sendText(conversationId, value, replyToId ?? undefined);
   };
 
@@ -158,8 +158,10 @@ export function Composer({
         <textarea
           value={text}
           onChange={(event) => {
-            setText(event.target.value.slice(0, MESSAGE_MAX_LENGTH));
-            notifyTyping();
+            const next = event.target.value.slice(0, MESSAGE_MAX_LENGTH);
+            setText(next);
+            if (next.trim()) notifyTyping();
+            else setTyping(conversationId, false);
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {

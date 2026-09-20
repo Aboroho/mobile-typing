@@ -5,7 +5,8 @@ import { newId, nowIso, sha256HexBytes } from '@mt/utils';
 import type { MediaViewResult, UploadIntentResponse, UploadResult } from '@mt/api-client';
 import { getData, type UserRecord } from '../data';
 import { getStorage } from '../storage';
-import { publish, topics } from '../realtime/bus';
+import { topics } from '../realtime/bus';
+import { publishEvent } from '../realtime/outbox';
 import { logger } from '../logger';
 import { requireParticipant } from './conversation-service';
 import { otherParticipant } from '@mt/domain';
@@ -181,11 +182,7 @@ export async function openViewOnce(input: {
   }
 
   if (media.conversationId) {
-    publish(topics.messages(media.conversationId), 'media.viewed', {
-      conversationId: media.conversationId,
-      mediaId: media.id,
-      viewerId: input.actor.id,
-    });
+    await notifyMediaViewed(media.conversationId, media.id, media.ownerId, input.actor.id);
   }
 
   return {
@@ -285,12 +282,38 @@ export async function markMediaViewed(input: { actor: UserRecord; mediaId: strin
   if (media.ownerId === input.actor.id) return;
   await data.media.markViewed(media.id, input.actor.id);
   if (media.conversationId) {
-    publish(topics.messages(media.conversationId), 'media.viewed', {
-      conversationId: media.conversationId,
-      mediaId: media.id,
-      viewerId: input.actor.id,
-    });
+    await notifyMediaViewed(media.conversationId, media.id, media.ownerId, input.actor.id);
   }
+}
+
+/**
+ * Tells the sender that their view-once media was opened. Durable (outbox) and
+ * addressed to the owner only, so the viewer's own stream does not echo it back
+ * and no other participant can observe it.
+ */
+async function notifyMediaViewed(
+  conversationId: string,
+  mediaId: string,
+  ownerId: string,
+  viewerId: string,
+): Promise<void> {
+  if (ownerId === viewerId) return;
+  await publishEvent({
+    topic: topics.messages(conversationId),
+    type: 'media.viewed',
+    recipients: [
+      {
+        userId: ownerId,
+        payload: {
+          eventId: `media_viewed_${mediaId}_${viewerId}`,
+          conversationId,
+          mediaId,
+          viewerId,
+          forUserId: ownerId,
+        },
+      },
+    ],
+  });
 }
 
 export async function getMediaRecord(input: {
