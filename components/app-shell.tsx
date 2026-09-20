@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { parsePublicEnv } from '@mt/config';
-import { useAccessStore } from '@/stores/access-store';
+import { TYPING_GAME_ENABLED, useAccessStore } from '@/stores/access-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useRealtimeStore } from '@/stores/realtime-store';
 import { useKeystrokeUnlock } from '@/hooks/use-keystroke-unlock';
@@ -17,10 +16,10 @@ import { ChatScreen } from '@/components/messages/chat-screen';
 /**
  * `NEXT_PUBLIC_ENABLE_TYPING_GAME=false` skips the typing-game disguise and
  * the secret-code gate entirely: visitors land directly on sign-in, then
- * chat. `NEXT_PUBLIC_*` values are inlined at build time, so this is a static
- * read, not a live fetch.
+ * chat. Defined in one place (`stores/access-store`) so the UI cannot disagree
+ * with the API about whether an unlock is required.
  */
-const GAME_ENABLED = parsePublicEnv().NEXT_PUBLIC_ENABLE_TYPING_GAME;
+const GAME_ENABLED = TYPING_GAME_ENABLED;
 
 /**
  * The single gate every visitor passes through.
@@ -61,14 +60,14 @@ export function AppShell() {
   // when there is a game/lock screen to return to.
   useTripleTap(handleTripleTap, GAME_ENABLED && unlocked);
 
-  // The challenge is fetched on first paint so the detector is armed immediately.
+  // The challenge is fetched on first paint so the detector is armed
+  // immediately, and re-armed after a lock so the next attempt works without a
+  // reload. One effect, not two: `startChallenge()` is single-flight and retries
+  // by itself (see stores/access-store), so the duplicate effect that used to
+  // send every request twice — and, with React's development double-invoke,
+  // four times into the rate limiter — is gone.
   useEffect(() => {
-    if (GAME_ENABLED && !challenge && !unlocked) void startChallenge();
-  }, [challenge, unlocked, startChallenge]);
-
-  // Re-arm after a lock so the next attempt works without a reload.
-  useEffect(() => {
-    if (GAME_ENABLED && !unlocked && !challenge) void startChallenge();
+    if (GAME_ENABLED && !unlocked) void startChallenge();
   }, [unlocked, challenge, startChallenge]);
 
   if (GAME_ENABLED && privacyLocked && !unlocked) {
@@ -95,7 +94,11 @@ export function AppShell() {
     <>
       {connectionWarning ? <ConnectionBanner message={connectionWarning} /> : null}
       {conversationId ? (
-        <ChatScreen conversationId={conversationId} onBack={() => setConversationId(null)} onHide={hideChat} />
+        <ChatScreen
+          conversationId={conversationId}
+          onBack={() => setConversationId(null)}
+          onHide={hideChat}
+        />
       ) : (
         <ConversationList onOpen={setConversationId} />
       )}

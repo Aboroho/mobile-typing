@@ -115,14 +115,14 @@ hint — a missed notification delays a delivery by one poll, it never loses one
 
 Two transports deliver those events:
 
-* **WebSocket** at `/api/v1/ws`, mounted by `server.ts` on the same port as
+- **WebSocket** at `/api/v1/ws`, mounted by `server.ts` on the same port as
   Next.js (`lib/ws/server.ts`). Authenticated from the `mt_session` cookie or an
-  `Authorization: Bearer` header *before* the socket is accepted — an
+  `Authorization: Bearer` header _before_ the socket is accepted — an
   unauthenticated upgrade is refused with `401`. Frames are described in
   `docs/api.md#websocket`. Per-socket subscriptions are validated against
   conversation membership, and every outbound frame is filtered to the
   recipient, so one socket can never observe another user's conversation.
-* **SSE** per conversation (`/conversations/{id}/events`) and per user
+- **SSE** per conversation (`/conversations/{id}/events`) and per user
   (`/calls/events`). The browser client uses this as an automatic fallback when
   no WebSocket is available, so `next dev` (which cannot mount the upgrade
   handler) still receives every durable event.
@@ -146,26 +146,52 @@ the code: unlock logic in `lib/access/*`, gate state in `stores/access-store.ts`
 and the lock triggers in `hooks/use-hide-chat.ts` (which every trigger funnels
 into).
 
+**Nothing user-scoped runs before the gate opens.** The session cookie lives for
+two weeks and the access session for thirty minutes, so a browser is routinely
+_signed in but locked_ — and every protected route answers `403
+ACCESS_REQUIRED` in that state. `RootProviders` therefore starts the realtime
+transport and the call stream only when `useAccessGateOpen()` is true
+(`stores/access-store.ts`), which stops a locked browser from subscribing to
+streams it may not read.
+
+Two more rules keep the gate usable (and quiet) on a phone:
+
+- `startChallenge()` is single-flight and retries with backoff, honouring
+  `Retry-After`. Reloading no longer multiplies the challenge requests, and a
+  rate-limited one re-arms by itself instead of leaving the game with no
+  challenge — which made typing the secret code silently do nothing. A failed
+  _unlock_ re-arms too, because the server consumes a challenge token per try.
+- An SSE stream cannot see _why_ it failed, so both streaming transports ask
+  `accessSessionGone()` (`lib/browser/access-session.ts`) after repeated
+  failures: a revoked access session ends the stream and returns the app to the
+  typing game through the existing `mt:access-required` event, while a network
+  problem keeps retrying.
+
+For a phone on the same network, `next.config.ts` also allows local network
+hosts in `allowedDevOrigins`: Next.js refuses its dev-only resources (HMR) for
+an unlisted host, and a blocked HMR connection leaves the page rendered but
+never hydrated — which looks exactly like "the unlock code does nothing".
+
 ## 6. Hiding the chat
 
 Three triggers, one handler:
 
-| Trigger | Where | Rule |
-| --- | --- | --- |
-| Header **Hide** button | `components/messages/chat-screen.tsx` | One tap, always available. |
-| **Double tap** in the message area | `lib/browser/double-tap.ts` + `hooks/use-double-tap.ts` | Two taps within 350 ms and 48 px of each other, on touch *or* pointer devices. A single tap never hides anything. |
-| **Tab hidden for 60 s** | `lib/browser/visibility-policy.ts` + `hooks/use-visibility-lock.ts` | `visibilitychange`, `pagehide` and `blur` start the timer; `pageshow`, `focus` and becoming visible cancel it and restore the *full* grace period. |
+| Trigger                            | Where                                                               | Rule                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Header **Hide** button             | `components/messages/chat-screen.tsx`                               | One tap, always available.                                                                                                                         |
+| **Double tap** in the message area | `lib/browser/double-tap.ts` + `hooks/use-double-tap.ts`             | Two taps within 350 ms and 48 px of each other, on touch _or_ pointer devices. A single tap never hides anything.                                  |
+| **Tab hidden for 60 s**            | `lib/browser/visibility-policy.ts` + `hooks/use-visibility-lock.ts` | `visibilitychange`, `pagehide` and `blur` start the timer; `pageshow`, `focus` and becoming visible cancel it and restore the _full_ grace period. |
 
 Deliberate details, each covered by a test:
 
-* A double tap on an `input`, `textarea`, `button`, `a`, audio/video control or
+- A double tap on an `input`, `textarea`, `button`, `a`, audio/video control or
   anything marked `data-no-double-tap` is ignored — selecting text or tapping
   the emoji picker must not hide the conversation.
-* Mobile browsers fire a synthesised mouse event after a touch, so the detector
+- Mobile browsers fire a synthesised mouse event after a touch, so the detector
   de-duplicates by pointer type and timestamp; one physical tap is one gesture.
-* **A plain window blur never hides the chat.** Switching apps for a second and
+- **A plain window blur never hides the chat.** Switching apps for a second and
   coming back must not lose the thread; only the 60-second hidden timer does.
-* Locking also ends any active call, so a hidden screen is not still
+- Locking also ends any active call, so a hidden screen is not still
   transmitting audio.
 
 Hiding is cosmetic. Every API route authenticates and authorizes on its own,

@@ -22,6 +22,7 @@
  *    removes every handler for that conversation.
  */
 import { connectEventStream } from './sse-client';
+import { accessSessionGone } from './access-session';
 
 export type RealtimeStatus = 'idle' | 'connecting' | 'websocket' | 'sse' | 'offline';
 
@@ -239,13 +240,18 @@ export function createRealtimeClient(): RealtimeClient {
       events: Object.fromEntries(
         SSE_EVENT_TYPES.map((type) => [
           type,
-          (payload: unknown) => dispatch({ topic: `conversation:${conversationId}`, type, payload }),
+          (payload: unknown) =>
+            dispatch({ topic: `conversation:${conversationId}`, type, payload }),
         ]),
       ),
       onError: () => setStatus('offline', 'event stream error'),
       onReady: () => {
         if (status !== 'websocket') setStatus('sse');
       },
+      // A conversation stream is rejected with 403 `ACCESS_REQUIRED` once the
+      // access session is gone; EventSource cannot see the status, so check it
+      // before retrying instead of looping on a route this browser may not read.
+      shouldReconnect: async () => !(await accessSessionGone()),
     });
     void handlers;
   }

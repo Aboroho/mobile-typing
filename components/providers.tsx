@@ -4,7 +4,8 @@ import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useCallStore } from '@/stores/call-store';
 import { initTheme, useUiStore } from '@/stores/ui-store';
-import { useAccessStore } from '@/stores/access-store';
+import { useAccessGateOpen, useAccessStore } from '@/stores/access-store';
+import { useRealtimeStore } from '@/stores/realtime-store';
 import { ToastHost } from '@/components/ui/toast-host';
 import { CallOverlay } from '@/components/audio-calls/call-overlay';
 
@@ -19,12 +20,33 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
   const lock = useAccessStore((state) => state.lock);
   const refreshAccess = useAccessStore((state) => state.refresh);
   const setPrivacyLocked = useUiStore((state) => state.setPrivacyLocked);
+  // A signed-in browser is not the same thing as an *unlocked* one: the session
+  // cookie lasts two weeks, the access session thirty minutes. Anything that
+  // talks to a user-scoped API has to wait for both.
+  const accessOpen = useAccessGateOpen();
+  const gateOpen = Boolean(user) && accessOpen;
 
   useEffect(() => {
     initTheme();
     void refreshAccess();
     void initialize();
   }, [initialize, refreshAccess]);
+
+  /**
+   * The realtime transport is only brought up once the access gate is open.
+   * Opening it earlier (a restored session on the typing-game screen, or an
+   * access session that quietly expired while the tab was open) makes the
+   * server reject every call/incoming-call stream with 403 `ACCESS_REQUIRED`
+   * and the client retry it forever — a wall of 403s for a browser that is
+   * sitting on the typing game.
+   */
+  useEffect(() => {
+    if (!gateOpen) {
+      useRealtimeStore.getState().stop();
+      return;
+    }
+    useRealtimeStore.getState().start();
+  }, [gateOpen]);
 
   // A revoked/expired access session (403 ACCESS_REQUIRED) returns to the game.
   useEffect(() => {
@@ -48,7 +70,7 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
   return (
     <>
       {children}
-      {user ? <CallListener /> : null}
+      {gateOpen ? <CallListener /> : null}
       <CallOverlay />
       <ToastHost />
     </>

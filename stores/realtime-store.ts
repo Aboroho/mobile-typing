@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getRealtimeClient, type RealtimeStatus } from '@/lib/browser/realtime-client';
+import { isAccessGateOpen } from './access-store';
 import { useUiStore } from './ui-store';
 
 /**
@@ -54,6 +55,15 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
 
   start() {
     if (typeof window === 'undefined') return;
+    /*
+     * Every event on this transport belongs to a signed-in, *unlocked* user: the
+     * call and conversation routes answer 403 `ACCESS_REQUIRED` otherwise, and a
+     * rejected SSE stream looks exactly like a flaky network, so the client
+     * would retry it forever. Restoring a session and signing in both happen
+     * before the secret-code gate is open, so connecting is deferred to
+     * `RootProviders`, which starts the transport the moment the gate opens.
+     */
+    if (!isAccessGateOpen()) return;
     if (!get().started) {
       get().init();
       set({ started: true });
@@ -64,7 +74,9 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
       // A transport failure is reported, never thrown: signup/login must not
       // inherit it.
       set({ status: 'offline', detail: String(error), warning: warningFor('offline') });
-      useUiStore.getState().pushToast('Live updates unavailable — your messages are still saved.', 'error');
+      useUiStore
+        .getState()
+        .pushToast('Live updates unavailable — your messages are still saved.', 'error');
     }
   },
 
