@@ -18,9 +18,9 @@ const GLOBAL_KEY = '__mt_realtime_bus_v1';
  *
  * With a single serverless instance per request this covers the common case
  * (writer and reader in the same isolate) and is enough for local development.
- * For multi-instance deployments the documented upgrade path is to subscribe to
- * Firestore change feeds directly from the client SDK, which the
- * `RealtimeTransport` abstraction already supports (docs/architecture.md).
+ * For multi-instance deployments the documented upgrade path is a shared
+ * outbox poller (Postgres LISTEN/NOTIFY or Redis Streams) behind the same
+ * `publish()` call site (see docs/architecture.md and docs/decisions.md).
  */
 function state(): BusState {
   const target = globalThis as unknown as Record<string, BusState | undefined>;

@@ -5,12 +5,11 @@ import { NextResponse, type NextRequest } from 'next/server';
  *
  * Responsibilities:
  *  - security headers, including a Content-Security-Policy that allows same-origin
- *    API/SSE traffic, Firebase endpoints when configured, and `blob:` for local
- *    media playback;
+ *    API/SSE traffic and `blob:` for local media playback;
  *  - a request id so server logs can be correlated with a single browser action.
  *
  * Authorisation is *not* done here: it happens in the API routes, where the
- * Firebase ID token and the access session are verified against the database.
+ * session token and the access session are verified against the database.
  *
  * The CSP is nonce-based rather than relying on `'unsafe-inline'`: the App
  * Router hydrates the page with inline `<script>` tags (`self.__next_f.push`,
@@ -29,11 +28,10 @@ function buildCsp(nonce: string): string {
     // scripts they themselves inject, without falling back to 'unsafe-inline'.
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://*.googleapis.com https://*.firebasestorage.app",
-    "media-src 'self' blob: mediastream: https://*.googleapis.com https://*.firebasestorage.app",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob: mediastream:",
     "font-src 'self' data:",
-    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://*.firebasestorage.app wss://*.firebaseio.com wss://*.googleapis.com",
-    "frame-src 'self' https://*.firebaseapp.com",
+    "connect-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",

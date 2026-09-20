@@ -1,7 +1,7 @@
 /**
  * @mt/types — canonical domain types shared by the web app, the API layer and
- * any future client (React Native). Nothing in this package depends on React,
- * Firebase or Node so it can be consumed anywhere.
+ * any future client (React Native). Nothing in this package depends on React
+ * or Node so it can be consumed anywhere.
  */
 export * from './common';
 export * from './limits';

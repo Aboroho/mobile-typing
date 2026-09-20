@@ -6,8 +6,10 @@ secret code into the game and then authenticating; it locks itself the moment
 the tab is hidden or the user triple-taps.
 
 Built as a **single Next.js app** (App Router) with TypeScript, Tailwind,
-Zustand, Zod and Firebase (Auth, Firestore, Storage, Admin SDK), plus WebRTC
-audio calls. The same UI works on phones and desktops.
+Zustand, Zod, Prisma/PostgreSQL and WebRTC audio calls. The same UI works on
+phones and desktops. No external backend service is required: authentication is
+email + password verified server-side (Argon2), sessions are database-backed,
+and media goes to local disk or any S3-compatible store.
 
 ```
 npm install && cp .env.example .env.local && npm run dev
@@ -16,8 +18,8 @@ npm install && cp .env.example .env.local && npm run dev
 Then open http://localhost:3000. Type the bootstrap secret code (`opensesame` by
 default) into the typing test to reveal sign-in.
 
-> New here? Read **[howto.md](./howto.md)** for `.env` setup, what happens when
-> data is missing, and troubleshooting the Start test button.
+> New here? Read **[howto.md](./howto.md)** for `.env` setup, the PostgreSQL
+> path, demo accounts, and troubleshooting the Start test button.
 
 ---
 
@@ -28,7 +30,7 @@ default) into the typing test to reveal sign-in.
 - [What is implemented](#what-is-implemented)
 - [Repository layout](#repository-layout)
 - [Environment variables](#environment-variables)
-- [Firebase and administrator setup](#firebase-and-administrator-setup)
+- [Administrator setup](#administrator-setup)
 - [WebRTC / TURN](#webrtc--turn)
 - [Documentation](#documentation)
 - [Limitations](#limitations)
@@ -44,85 +46,77 @@ npm run dev             # http://localhost:3000
 
 Data and storage default to in-memory providers (`DATA_PROVIDER=memory`,
 `STORAGE_PROVIDER=memory`), which are refused outright in a production build and
-do not survive a restart.
+do not survive a restart. Everything — including sign-up, sign-in and chat —
+works locally with zero external services.
 
-**Authentication always needs a Firebase project.** There is no development
-authentication provider and no offline fallback: the browser signs users up and
-in with the Firebase client SDK, and the API verifies the resulting ID tokens
-with the Admin SDK. Fill in the `NEXT_PUBLIC_FIREBASE_*` (web) and
-`FIREBASE_*` (service account) blocks of `.env.local`, and enable
-Authentication → Sign-in method → Email/Password in the console. `npm run doctor`
-checks the whole setup, including that the Email/Password provider is enabled.
+For persistent data, point the app at PostgreSQL instead:
 
-To create demo accounts against a running dev server:
+```bash
+npx prisma migrate dev  # creates/updates the database from prisma/schema.prisma
+```
+
+and set `DATA_PROVIDER=prisma` (with `DATABASE_URL`) in `.env.local`. See
+[howto.md](./howto.md) for the full walkthrough.
+
+To create demo accounts against the configured provider:
 
 ```bash
 npm run seed
 ```
 
-The script signs up through the Identity Toolkit REST API
-(`NEXT_PUBLIC_FIREBASE_API_KEY`) and registers with the resulting Firebase ID
-token, exactly like the browser does.
+The script registers an administrator account (`ADMIN_EMAIL` with the password
+from `ADMIN_PASSWORD`) and a peer account through the real registration flow,
+then prints the admin uid for `ADMIN_UID`. It refuses to run in production.
 
-### Keeping everything in Firebase
-
-Set `DATA_PROVIDER=firestore` and `STORAGE_PROVIDER=firebase` plus the web and
-Admin credentials, then verify the result before relying on it:
+To review your environment files for common misconfigurations:
 
 ```bash
 npm run doctor
 ```
 
-It reports which file each value came from, initialises the Admin SDK, writes and
-deletes a probe document, checks that the conversation-list index exists, signs a
-throwaway user up through the same Identity Toolkit call the browser makes, and
-uploads and deletes a probe object — so a missing Firestore database, a disabled
-Email/Password provider or an absent bucket is named instead of surfacing later as
-a 401 or a 500. `.env.local` takes precedence over `.env`, and a key set to an
-empty value still counts as set, so a copied template silently hides real
-credentials in the other file; that shadowing is the first thing the doctor
-reports. Console steps it cannot do for you are in
-[`firebase/README.md`](./firebase/README.md) and
-[`docs/deployment.md`](./docs/deployment.md).
+It reports which file each value came from, flags placeholder/short secrets,
+validates the Prisma `DATABASE_URL` and S3 credentials when those providers are
+selected, and warns when no administrator is configured. Production deployment
+(VPS, systemd, Nginx, backups) is covered in [`docs/deploy.md`](./docs/deploy.md).
 
 ## Commands
 
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the Next.js dev server (port 3000) |
-| `npm run build` | Production build |
-| `npm run start` | Serve the production build |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run lint` | ESLint with `--max-warnings=0` |
-| `npm run lint:fix` | ESLint with autofix |
-| `npm run format` / `npm run format:check` | Prettier |
-| `npm run test` | Vitest: unit + API integration tests |
-| `npm run test:watch` | Vitest watch mode |
-| `npm run test:coverage` | Vitest with V8 coverage |
-| `npm run e2e:install` | Download Chromium for Playwright (once) |
-| `npm run e2e` | Playwright end-to-end tests (starts the dev server) |
-| `npm run verify` | typecheck → lint → test → build |
-| `npm run seed` | Register demo users through Firebase and the public API |
-| `npm run doctor` | Check that this machine can really use the configured Firebase project (env precedence, credentials, Firestore, Auth, Storage) |
-| `npm run firebase:deploy:rules` | Deploy Firestore/Storage rules and indexes |
+| Command                                   | Description                                                           |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| `npm run dev`                             | Start the Next.js dev server (port 3000)                              |
+| `npm run build`                           | Production build                                                      |
+| `npm run start`                           | Serve the production build                                            |
+| `npm run serve`                           | Standalone server: Next.js + WebSocket + outbox worker in one process |
+| `npm run worker`                          | Standalone outbox worker (for running it as its own process)          |
+| `npm run typecheck`                       | `tsc --noEmit`                                                        |
+| `npm run lint`                            | ESLint with `--max-warnings=0`                                        |
+| `npm run lint:fix`                        | ESLint with autofix                                                   |
+| `npm run format` / `npm run format:check` | Prettier                                                              |
+| `npm run test`                            | Vitest: unit + API integration tests                                  |
+| `npm run test:watch`                      | Vitest watch mode                                                     |
+| `npm run test:coverage`                   | Vitest with V8 coverage                                               |
+| `npm run e2e:install`                     | Download Chromium for Playwright (once)                               |
+| `npm run e2e`                             | Playwright end-to-end tests (starts the dev server)                   |
+| `npm run verify`                          | typecheck → test → build                                              |
+| `npm run seed`                            | Register demo users through the real registration flow                |
+| `npm run doctor`                          | Check env files, secrets, providers and credentials on this machine   |
+| `npm run prisma:generate`                 | Regenerate the Prisma client                                          |
+| `npm run prisma:migrate`                  | `prisma migrate dev` (local schema changes)                           |
+| `npm run prisma:deploy`                   | `prisma migrate deploy` (production migrations)                       |
 
 ### Deploying
 
-```bash
-npm run build           # or: vercel deploy --prod
-firebase deploy --only firestore:rules,storage.rules,firestore:indexes
-```
-
-Full Vercel instructions, including the 4.5 MB body-size constraint, are in
-[`docs/deployment.md`](./docs/deployment.md).
+Single-server VPS deployment (PostgreSQL, Nginx, systemd/PM2, backups) is
+documented step by step in [`docs/deploy.md`](./docs/deploy.md).
 
 ## What is implemented
 
 **Access flow** — every visitor sees only the typing game. A secret code, matched
 as a consecutive case-sensitive substring of a 15-character rolling keystroke
-buffer, unlocks sign-in. The code is never displayed, never logged, and grants no
-data access: every API route independently verifies the access session and the
-user, and the access session is bound to the user it was issued for.
+buffer, unlocks sign-in. The code is handed to the browser by the challenge
+endpoint (matching happens locally), so it is treated as public: it grants no
+data access, and every API route independently verifies the access session and
+the user. The access session is bound to the user it was issued for.
 
 **Typing game** — English and Bengali word lists (static assets under
 `public/typing-words/`), 30/60/120 s tests, live WPM/accuracy/remaining
@@ -136,24 +130,26 @@ secret-code gate entirely — visitors then land straight on sign-in and chat.
 tab hide/minimise both return to the game and clear unlock state; an active call
 is ended through the API first.
 
-**Authentication** — Firebase Authentication (email/password) only. The browser
-SDK verifies the password and holds the ID token; the API verifies that token
-server-side, initialises the profile and mints an httpOnly Firebase session
-cookie (which is what the SSE streams authenticate with). Register, login,
-logout (with server-side credential revocation), reauthentication and password
-reset; opaque error messages that cannot enumerate accounts; rate limiting. No
-password or password hash is ever stored in this application's database.
+**Authentication** — email + password, verified server-side against an Argon2id
+hash. Passwords travel in the POST body over TLS and are never logged; only the
+hash is stored, and it never leaves the data layer. Sessions are opaque 256-bit
+tokens kept hashed in the database and delivered as an httpOnly `mt_session`
+cookie (non-browser clients may alternatively send `Authorization: Bearer
+<token>`). Register, login, logout (with server-side session revocation) and
+password re-authentication; opaque error messages that cannot enumerate
+accounts; rate limiting. Password reset by email is **not** implemented — the UI
+reports "not configured" rather than pretending to send mail.
 
 **Conversations** — strictly 1:1 (a pair always resolves to the same
 conversation), search, unread counts, presence, typing indicators, hide from list,
 block.
 
 **Messaging** — text, emoji and multiline messages with delivery/read/failed
-states, reply-to, pagination, realtime updates over SSE, optimistic UI with
-rollback and retry, length limits and sanitisation. Edits are author-only within a
-server-enforced two-minute window and keep full history. Deletion is soft: the
-content disappears for users, is preserved for administrators, and can be scoped
-to "just me".
+states, reply-to, pagination, realtime updates over SSE (or WebSocket when
+running `npm run serve`), optimistic UI with rollback and retry, length limits
+and sanitisation. Edits are author-only within a server-enforced two-minute
+window and keep full history. Deletion is soft: the content disappears for
+users, is preserved for administrators, and can be scoped to "just me".
 
 **Images** — capture or pick, client-side compression to 1600 px, progress and
 cancel, MIME sniffing from magic bytes, size limits, secure storage paths, and
@@ -171,10 +167,10 @@ states, mute, duration, ICE restart, TURN diagnostics, and history written into
 the conversation. Signalling goes through the authenticated API only.
 
 **Administration** — dashboard statistics, secret-code management with rotation
-(signs everyone out) and an audit log that never shows the plaintext, user search
-and disable, conversation inspection including deleted messages and edit history,
-media inspection including view-once and deleted items, call history and audit
-logs.
+(signs everyone out) and an audit log that never shows the plaintext, user
+search and disable, conversation inspection including deleted messages and edit
+history, media inspection including view-once and deleted items, call history
+and audit logs.
 
 ## Repository layout
 
@@ -187,12 +183,14 @@ lib/
   validation/        Zod schemas for every request
   domain/            Pure business rules (keystroke buffer, scoring, policies)
   api-client/        Typed browser API client
-  config/            Environment parsing (public + server)
+  config/            Environment parsing (public + server) and diagnostics
   utils/             Hashing, ids, time, base64, text helpers
   access/ auth/ …    Server services, data providers, realtime, WebRTC
+prisma/              PostgreSQL schema (prisma/schema.prisma) + migrations
 public/typing-words/ English + Bengali word lists
-firebase/            Firestore/Storage rules, indexes, provisioning notes
-scripts/             Dev seeding, admin custom-claim helper
+scripts/             Dev seeding (seed-dev.ts) and env checker (doctor.mjs)
+server.ts            Standalone server (Next.js + WebSocket + outbox worker)
+proxy.ts             Security headers + CSP + request id (replaces middleware)
 docs/                Architecture, API, schema, security, deployment, decisions
 tests/               Vitest unit + API integration tests
 e2e/                 Playwright specifications
@@ -208,27 +206,24 @@ mobile app. Shared modules live under `lib/` and are imported via `@/` and
 See [`.env.example`](./.env.example) and **[howto.md](./howto.md)** for the
 annotated list and what happens when values are missing. The essentials:
 
-| Variable | Purpose |
-| --- | --- |
-| `DATA_PROVIDER` / `STORAGE_PROVIDER` | `memory` for local work, `firestore`/`firebase` in production |
-| `APP_SECRET` | Signs access challenges and sessions (≥ 16 characters) |
-| `ADMIN_UID` / `ADMIN_EMAIL` | Administrator identity; never sent to a client |
-| `SEED_SECRET_CODE` | Bootstrap code until an administrator changes it |
-| `NEXT_PUBLIC_FIREBASE_*` | Firebase web config (public by design) |
-| `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | Admin SDK credentials |
-| `STUN_SERVER_URL`, `TURN_SERVER_*` | WebRTC ICE servers |
+| Variable                           | Purpose                                                               |
+| ---------------------------------- | --------------------------------------------------------------------- |
+| `DATA_PROVIDER`                    | `memory` for local work, `prisma` (PostgreSQL) in production          |
+| `STORAGE_PROVIDER`                 | `memory` for local work, `local` (disk) or `s3` in production         |
+| `DATABASE_URL`                     | PostgreSQL connection string (required for `prisma`)                  |
+| `APP_SECRET`                       | Signs access challenges/sessions (≥ 16 characters, 32+ in production) |
+| `ADMIN_UID` / `ADMIN_EMAIL`        | Administrator identity; never sent to a client                        |
+| `SEED_SECRET_CODE`                 | Bootstrap code until an administrator changes it                      |
+| `SESSION_DURATION_HOURS`           | Session lifetime (default 336 = two weeks)                            |
+| `STUN_SERVER_URL`, `TURN_SERVER_*` | WebRTC ICE servers                                                    |
 
-## Firebase and administrator setup
+## Administrator setup
 
-```bash
-firebase projects:create <project-id>
-firebase use <project-id>
-firebase deploy --only firestore:rules,storage.rules,firestore:indexes
-ADMIN_UID=<uid> node scripts/set-admin-claim.mjs
-```
-
-Step-by-step instructions — including Authentication, Firestore, Storage and the
-Vercel deployment — are in [`docs/deployment.md`](./docs/deployment.md).
+The administrator is whoever matches `ADMIN_UID` (canonical) or `ADMIN_EMAIL`
+(convenience for development) — checked server-side on every admin request, so
+there is no role to grant and nothing to deploy. `npm run seed` prints the uid
+to put in `ADMIN_UID`. Administrators are **not** exempt from the typing-game
+gate: the admin UI and API require an access session too.
 
 ## WebRTC / TURN
 
@@ -245,31 +240,35 @@ TURN_SERVER_CREDENTIAL=<secret>
 
 ## Documentation
 
-| Document | Contents |
-| --- | --- |
-| [`howto.md`](./howto.md) | **Start here** — install, `.env`, missing data, Start button |
-| [`docs/architecture.md`](./docs/architecture.md) | Setup, local development, layout, request lifecycle, access gate |
-| [`docs/api.md`](./docs/api.md) | Every route, auth requirement, payloads, error codes, SSE events |
-| [`docs/database-schema.md`](./docs/database-schema.md) | Collections, fields, indexes, cursors |
-| [`docs/security.md`](./docs/security.md) | Threat model, defence in depth, credentials, cookies, headers |
-| [`docs/deployment.md`](./docs/deployment.md) | Environment variables, Firebase, TURN, Vercel, troubleshooting |
-| [`docs/decisions.md`](./docs/decisions.md) | Architectural decisions with rejected alternatives |
+| Document                                               | Contents                                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------------- |
+| [`howto.md`](./howto.md)                               | **Start here** — install, `.env`, Postgres, demo accounts, troubleshooting |
+| [`docs/architecture.md`](./docs/architecture.md)       | Setup, local development, layout, request lifecycle, access gate           |
+| [`docs/api.md`](./docs/api.md)                         | Every route, auth requirement, payloads, error codes, SSE/WebSocket events |
+| [`docs/database-schema.md`](./docs/database-schema.md) | PostgreSQL tables, relations, indexes, cursors                             |
+| [`docs/security.md`](./docs/security.md)               | Threat model, defence in depth, credentials, cookies, headers              |
+| [`docs/deploy.md`](./docs/deploy.md)                   | VPS deployment: Postgres, env reference, Nginx, backups, TURN              |
+| [`docs/decisions.md`](./docs/decisions.md)             | Architectural decisions with rejected alternatives                         |
+| [`docs/migration.md`](./docs/migration.md)             | Historical Firebase → PostgreSQL cutover runbook (one-time)                |
 
 ## Limitations
 
 Stated plainly, because they shape how the app should be used:
 
-- **The secret code is public.** The browser has to match it locally, so it is in
-  the bundle. It gates the UI and nothing else — every route re-authorises.
+- **The secret code is public.** The challenge endpoint hands it to the browser
+  so keystrokes can be matched locally. It gates the UI and nothing else —
+  every route re-authorises.
 - **No end-to-end encryption.** The server can read every message. An attacker
-  with Admin credentials or database access can read everything.
+  with database access can read everything.
 - **Deletion is soft.** Messages, media and their original content are retained
   for administrative inspection.
 - **Screenshots cannot be prevented.** View-once photos are claimed atomically,
   served once with `no-store`, and cleared from the DOM on close — but the OS
   screenshot shortcut, screen recording and a second camera all still work. The
   UI says so.
-- **Realtime is best effort on multi-instance deployments.** SSE runs over an
-  in-process bus; Firestore change feeds are the documented upgrade path.
-- **Vercel caps request bodies at 4.5 MB.** Images are compressed well below
-  that; very long voice messages may exceed it and are rejected with `413`.
+- **Realtime is best effort on multi-instance deployments.** SSE/WebSocket run
+  over an in-process bus plus a database outbox; a shared outbox poller
+  (Postgres `LISTEN`/`NOTIFY` or Redis Streams) is the documented upgrade path.
+- **Very large uploads depend on deployment limits.** Oversized bodies are
+  rejected with `413`; size the reverse proxy and `STORAGE_MAX_UPLOAD_BYTES`
+  together (see [`docs/deploy.md`](./docs/deploy.md)).

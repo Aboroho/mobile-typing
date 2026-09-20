@@ -2,8 +2,8 @@
  * Next.js instrumentation hook — runs once when the server starts, before the
  * first request is served.
  *
- * Used to review the environment (a Firebase provider without Firebase
- * credentials otherwise fails much later, as an unrelated-looking 401 or 500),
+ * Used to review the environment (a provider without its credentials
+ * otherwise fails much later, as an unrelated-looking 401 or 500),
  * to warm the access configuration so the very first visitor to the typing game
  * does not pay for (or trip over) the bootstrap, and to fail fast when the
  * environment is unusable.
@@ -22,7 +22,7 @@ export async function register(): Promise<void> {
       epoch: config.epoch,
       maxLength: config.maxLength,
       dataProvider: process.env.DATA_PROVIDER ?? 'memory',
-      authProvider: 'firebase',
+      authProvider: 'argon2-session',
     });
   } catch (error) {
     logger.error('boot.failed', { error: String(error) });

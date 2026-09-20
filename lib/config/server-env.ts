@@ -106,11 +106,6 @@ export const serverEnvSchema = z.object({
   /** Public URL the browser uses to open the WS connection. */
   NEXT_PUBLIC_WS_URL: optionalNonEmpty,
 
-  // --- Deprecated / removed Firebase vars are accepted but ignored --------
-  /**
-   * Legacy Firebase env vars are intentionally left out of the validated schema
-   * to surface any residual code that still reads them. They are NOT used.
-   */
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

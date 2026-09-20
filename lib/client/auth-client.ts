@@ -195,8 +195,3 @@ export function authClientMessage(error: unknown): string | null {
   }
   return null;
 }
-
-// Backwards-compatible alias used in a few places.
-export function firebaseAuthMessage(error: unknown): string | null {
-  return authClientMessage(error);
-}

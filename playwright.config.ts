@@ -7,10 +7,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   npm run e2e           # starts the dev server and runs the specs
  *
  * They run against the development data and storage providers, so nothing is
- * written to a real database. Authentication is Firebase Authentication and has
- * no offline mode: the specs that sign in need a Firebase project (set the
- * `NEXT_PUBLIC_FIREBASE_*` values in `.env.local`) or the Firebase Auth emulator
- * (`FIREBASE_AUTH_EMULATOR_HOST`, which the Admin SDK honours by itself).
+ * written to a real database. Authentication is email + password against the
+ * dev server itself, so the specs that sign in need no external service.
  * A mobile viewport is used because the product is mobile-first; a desktop
  * project is included for the responsive check.
  */

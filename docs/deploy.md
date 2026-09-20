@@ -28,6 +28,14 @@ DATABASE_URL=postgres://keypad:CHANGE_ME@127.0.0.1:5432/keypad npx prisma migrat
 npm run build
 ```
 
+Before going further, run the environment pre-flight check — it names the exact
+file each value came from, flags placeholder/short secrets, and validates the
+Prisma and S3 credentials:
+
+```bash
+npm run doctor
+```
+
 ## 2. Required environment variables
 
 See `.env.example`. Minimum viable production set:
@@ -42,7 +50,6 @@ STORAGE_PROVIDER=local
 STORAGE_LOCAL_DIR=/var/lib/keypad/media
 ADMIN_EMAIL=you@example.com
 SESSION_DURATION_HOURS=336   # two weeks
-ARGON2_PEPPER=<openssl rand -hex 16>
 SEED_SECRET_CODE=<choose a 1-15 char code — the typing-game gate>
 NEXT_PUBLIC_APP_URL=https://keypad.example.com
 ```
@@ -50,8 +57,7 @@ NEXT_PUBLIC_APP_URL=https://keypad.example.com
 Generate values:
 
 ```bash
-openssl rand -hex 32   # APP_SECRET
-openssl rand -hex 16   # ARGON2_PEPPER
+openssl rand -hex 32   # APP_SECRET (must be >= 32 characters in production)
 ```
 
 ## 3. Run the server
@@ -100,6 +106,33 @@ pm2 save
 pm2 startup systemd   # follow the printed command
 ```
 
+### Standalone outbox worker (optional)
+
+`npm run serve` already runs the outbox worker in-process. If you prefer it as
+its own unit (so it can be restarted independently), add a second service:
+
+```ini
+[Unit]
+Description=Keypad outbox worker
+After=network.target postgresql.service keypad.service
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/keypad
+EnvironmentFile=/srv/keypad/.env.production
+ExecStart=/usr/bin/env npm run worker
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Poll interval and batch size come from `OUTBOX_POLL_INTERVAL_MS` (default 500)
+and `OUTBOX_BATCH_SIZE` (default 100). Do not run two workers against the same
+database unless the poller is shared (see decision #10 in `decisions.md`).
+
 ## 4. Nginx reverse proxy (HTTPS + WSS)
 
 Generate a certificate with `certbot --nginx -d keypad.example.com` after
@@ -145,7 +178,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## 5. Firewall
 
-Only expose 80/442 and SSH. PostgreSQL stays bound to localhost.
+Only expose 80/443 and SSH. PostgreSQL stays bound to localhost.
 
 ```bash
 sudo ufw allow OpenSSH
@@ -165,7 +198,47 @@ sudo ufw enable
   set `STORAGE_PROVIDER=s3` and provide `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`,
   `STORAGE_SECRET_KEY`, `STORAGE_ENDPOINT` (for R2/MinIO), `STORAGE_REGION`.
 
-## 7. Backups
+## 7. TURN (coturn) for audio calls
+
+STUN alone fails for clients behind symmetric NATs — most mobile networks. For
+production calls, run [coturn](https://github.com/coturn/coturn) on the same
+host (or a second one) and point the app at it:
+
+```bash
+sudo apt install coturn
+```
+
+`/etc/turnserver.conf` (essentials):
+
+```
+listening-port=3478
+realm=keypad.example.com
+server-name=keypad.example.com
+use-auth-secret
+static-auth-secret=<openssl rand -hex 32>
+total-quota=100
+```
+
+```bash
+sudo systemctl enable --now coturn
+sudo ufw allow 3478/tcp
+sudo ufw allow 3478/udp
+# media relay range (also open in coturn config: min-port/max-port)
+sudo ufw allow 49160:49200/udp
+```
+
+Then in `.env.production`:
+
+```
+TURN_SERVER_URL=turn:keypad.example.com:3478
+TURN_SERVER_USERNAME=keypad
+TURN_SERVER_CREDENTIAL=<static-auth-secret above>
+```
+
+The `/api/v1/calls/ice-servers` endpoint serves this configuration only to
+authenticated users; verify it returns your TURN entry after restarting.
+
+## 8. Backups
 
 ```bash
 # Daily database dump to /var/backups/keypad
@@ -174,16 +247,18 @@ pg_dump -Fc keypad -U keypad -h 127.0.0.1 -f /var/backups/keypad/$(date +%F).dum
 rsync -a --delete /var/lib/keypad/media/ backup-host:/var/backups/keypad/media/
 ```
 
-## 8. First-run: promote an admin
+## 9. First-run: promote an admin
 
-Sign up for an account using the email you set in `ADMIN_EMAIL`. The first user
-with that email is automatically granted `isAdmin: true` on every login.
+Register an account using the email you set in `ADMIN_EMAIL` (the gate code is
+your `SEED_SECRET_CODE`). Any account matching `ADMIN_UID` or `ADMIN_EMAIL` is
+treated as administrator on every request — there is no role to grant. The
+`npm run seed` output prints the uid to put in `ADMIN_UID`.
 
-The secret code is set from `SEED_SECRET_CODE` on first boot. Rotate it later
-from `/settings?admin=1` (signed in as the admin), which signs out every active
-typing-game session.
+The secret code is set from `SEED_SECRET_CODE` on first boot. Change it from
+`/admin/settings` (signed in as the admin) with the `rotate` strategy, which
+signs out every active typing-game session.
 
-## 9. Verifying
+## 10. Verifying
 
 ```bash
 curl -s https://keypad.example.com/api/v1/health | jq .
@@ -194,15 +269,31 @@ Expected:
 ```json
 {
   "ok": true,
+  "requestId": "…",
   "data": {
     "ok": true,
     "version": "2.0.0",
     "dataProvider": "prisma",
     "authProvider": "argon2-session",
-    "storageProvider": "local"
+    "storageProvider": "local",
+    "time": "…",
+    "access": { "epoch": 1, "maxLength": 15, "caseSensitive": true, "configured": true }
   }
 }
 ```
+
+## 11. Troubleshooting
+
+| Symptom                                       | Cause / fix                                                                                                                                                 |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server exits on boot with a provider error    | Production refuses the `memory` providers (`assertFallbackAllowed`). Set `DATA_PROVIDER=prisma` + `DATABASE_URL` and `STORAGE_PROVIDER=local` or `s3`.      |
+| `config.issue` lines in the log               | Read the `message` field — it names the exact variables. See `howto.md` §5 for the known reasons.                                                           |
+| Health returns 500 / Prisma errors            | `DATABASE_URL` unreachable or migrations not applied: re-run `npx prisma migrate deploy` with the production URL.                                           |
+| Register/login fail with 429                  | Expected under brute-force limits (`auth:register` 5/10 min, `auth:login` 8/10 min per email). Counters are in-process — restarting the server resets them. |
+| Uploads fail with 413                         | Nginx `client_max_body_size` (25m above) and `STORAGE_MAX_UPLOAD_BYTES` must be sized together.                                                             |
+| Admin UI says forbidden                       | `ADMIN_UID`/`ADMIN_EMAIL` does not match the signed-in account. Admin status is derived per request, so fix the env and restart — nothing else to change.   |
+| Calls connect on Wi-Fi but not on mobile data | Missing/broken TURN — see the coturn section above. Check `/api/v1/calls/ice-servers` as an authenticated user.                                             |
+| Realtime events stop after redeploy           | The outbox worker only runs inside `npm run serve` (or the standalone unit). `npm start` serves pages but does not poll the outbox.                         |
 
 ## What still needs to be installed
 

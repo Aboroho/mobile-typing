@@ -12,7 +12,6 @@ const nextConfig: NextConfig = {
   // Media is served through authorised API routes, never through the optimiser,
   // so remote patterns stay empty and `next/image` is not used for user media.
   images: { remotePatterns: [] },
-  serverExternalPackages: ['firebase-admin'],
   output: 'standalone',
 };
 

@@ -11,7 +11,7 @@ function randomBytes(length: number): Uint8Array {
   return new Uint8Array(nodeCrypto.randomBytes(length));
 }
 
-/** Collision-resistant, lexicographically sortable enough for Firestore ids. */
+/** Collision-resistant ids with an optional human-readable prefix. */
 export function newId(prefix = ''): string {
   const bytes = randomBytes(16);
   let out = '';

@@ -9,29 +9,33 @@ The app protects private 1:1 conversations from three distinct adversaries:
 2. **A curious or malicious user of the app** — addressed by per-request
    server-side authorisation, 1:1 participant checks and soft deletes that keep
    content out of reach of non-participants.
-3. **An attacker who reads the JavaScript bundle** — they will find the secret
-   code. It grants no data access whatsoever; see "The secret code is not a
-   secret" below.
+3. **An attacker who reads the network traffic or the JavaScript bundle** — they
+   will find the secret code. It grants no data access whatsoever; see "The
+   secret code is not a secret" below.
 
 What the app does **not** claim to defend against: a compromised device with
 screen-capture access, a determined recipient who photographs the screen with a
-second camera, or an adversary who controls the network *and* the browser.
+second camera, or an adversary who controls the network _and_ the browser.
 
 ## Defence in depth
 
-Every data access is authorised twice:
+There is exactly one trust boundary: the API route. The browser is untrusted
+input.
 
-1. **Firestore rules** (`firebase/firestore.rules`) deny all client writes and
-   restrict reads to participants, with administrators identified by the
-   `role == 'admin'` custom claim.
-2. **The API layer** re-checks everything with the Admin SDK, which bypasses
-   those rules — so a client pointed straight at Firestore still cannot write,
-   and a client using our API still cannot read outside its conversations.
-
-Storage rules (`firebase/storage.rules`) deny *all* direct client access to
-media objects. Bytes only leave the bucket through
-`GET /api/v1/media/{id}/content` (or a 60-second signed URL minted by that same
-authorised path).
+1. **Every route authorises independently** — `requireAccess` (valid, correctly
+   bound, unexpired access session), `requireUser` (verified session token),
+   and `requireAdminAccess` (both, plus the configured administrator identity)
+   run on every request. A user id, uid or role in a body or query string is
+   never trusted.
+2. **Storage has no direct client path.** Media bytes live in the configured
+   storage provider (`memory` / `local` / `s3`) under random non-guessable
+   object keys, and leave the server only through the authorised
+   `GET /api/v1/media/{id}/content` (or the admin equivalent, which is
+   audit-logged). There is no signed-URL bypass.
+3. **The database is reachable only by the server.** Services touch data solely
+   through the provider interface (`getData()`); the memory provider keeps
+   everything in process-local Maps and the Prisma provider talks to
+   PostgreSQL. No client credential reaches either store.
 
 ## The secret code is not a secret
 
@@ -52,42 +56,38 @@ else.
 
 ## Credentials
 
-Authentication is Firebase Authentication (email/password) in every environment.
-There is no development authentication provider and no fallback: without a
-Firebase project nobody can sign up or sign in, and the server says so by naming
-the missing variables.
+Authentication is email + password verified server-side against an Argon2id
+hash, in every environment. There is no development authentication provider and
+no fallback: without the database (or the memory provider in development)
+nobody can sign up or sign in.
 
-| Party | What it does |
-| --- | --- |
-| Browser | `createUserWithEmailAndPassword` / `signInWithEmailAndPassword`. It is the only place a password exists, and Firebase is the only party that verifies it. The ID token is held in memory; a Firebase refresh token lives in IndexedDB. |
-| This API | `verifyIdToken` / `verifySessionCookie` with `checkRevoked: true`. It reads the uid and email **from the verified token** — never from a request body — and stores no credential of its own. Reauthentication additionally requires `auth_time` within five minutes. |
-| Session cookie | `createSessionCookie` on a fresh credential, `mt_session`, httpOnly, `SameSite=Lax`, `Secure` in production, 7 days. This is what SSE streams and page reloads authenticate with, because `EventSource` cannot send an `Authorization` header. |
+| Party         | What it does                                                                                                                                                                                                                                                                                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser       | Sends `{ name?, email, password }` to `POST /auth/register` / `POST /auth/login`. The password travels in the POST body over TLS and is never logged. It is the only place a plaintext password exists.                                                                                                                                                                 |
+| This API      | Hashes with Argon2id on register, verifies with `verifyPassword` on login, and takes the uid and email **from the verified session** — never from a request body. Stores the hash in the `User` table, where no read path above the data layer can see it.                                                                                                              |
+| Session token | A 256-bit opaque token, stored hashed in `UserSession`, delivered as the httpOnly `mt_session` cookie (browsers) or an `Authorization: Bearer` token (API/WebSocket clients). Lifetime is `SESSION_DURATION_HOURS` (default 336 = two weeks). This is what SSE streams and page reloads authenticate with, because `EventSource` cannot send an `Authorization` header. |
 
 Login failures are deliberately indistinguishable: a wrong password, an unknown
-email and a **disabled account** all read the same, so nothing can be used to
-enumerate accounts. The first two are refused by Firebase with
-`auth/invalid-login-credentials`, which the browser maps to `unable to sign in
-with those details`; an account an administrator disabled cannot obtain a
-credential at all (`auth/user-disabled`), and a stale or revoked one is rejected
-by the API with the same wording. Account existence is still disclosed by
-Firebase's own `auth/email-already-in-use` at sign-up, which the browser maps to
-`that email address already has an account`; that is inherent to any working
-sign-up form.
+email and a **disabled account** all return the same 401
+`unable to sign in with those details`, so nothing can be used to enumerate
+accounts. The server log records the specific `auth.login_*` line for forensics.
+Registration is safe to retry: a known email with the correct password
+re-issues a session, while a wrong password gets a generic 401 — account
+existence is never disclosed.
 
-Password reset is Firebase's `sendPasswordResetEmail`, called from the browser —
-this application never held a password and has no reset endpoint.
+Password reset by email is **not implemented** — there is no reset endpoint, and
+the sign-in UI reports "not configured" rather than pretending to send mail.
 
-**Logout revokes credentials server-side** (`revokeRefreshTokens`) before the
-browser signs out, so a session cookie copied earlier stops working. That is
-Firebase's account-wide revocation: it ends the session on every device of that
-user, not just the one that logged out.
+**Logout revokes the session server-side** before the browser state is cleared,
+so a token copied earlier stops working immediately. Revocation is
+per-session: other devices stay signed in.
 
 ## Cookies
 
-| Cookie | Contents | Flags |
-| --- | --- | --- |
-| `mt_access` | Signed access session (audience `access-session`, epoch, optional uid) | `httpOnly`, `SameSite=Lax`, `Secure`, 30 min |
-| `mt_session` | Firebase session cookie (signed by Google) | `httpOnly`, `SameSite=Lax`, `Secure`, 7 days |
+| Cookie       | Contents                                                               | Flags                                                          |
+| ------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `mt_access`  | Signed access session (audience `access-session`, epoch, optional uid) | `httpOnly`, `SameSite=Lax`, `Secure`, 30 min                   |
+| `mt_session` | Opaque session token (hashed server-side in `UserSession`)             | `httpOnly`, `SameSite=Lax`, `Secure`, `SESSION_DURATION_HOURS` |
 
 Neither is readable from JavaScript. The access cookie is **bound to a user**
 when one is known: `accessBindingCookie()` returns `null` if the browser never
@@ -115,11 +115,12 @@ become a way around the typing-game gate.
 `proxy.ts` sets, on every response:
 
 ```
-Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:;
-  connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com
-               wss://*.firebaseio.com wss://*.googleapis.com;
-  frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+Content-Security-Policy: default-src 'self';
+  script-src 'self' 'nonce-<random>' 'strict-dynamic' ('unsafe-eval' in dev only);
+  style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;
+  media-src 'self' blob: mediastream:; font-src 'self' data:;
+  connect-src 'self'; frame-ancestors 'none'; base-uri 'self';
+  form-action 'self'; object-src 'none'
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
 Referrer-Policy: no-referrer
@@ -127,35 +128,40 @@ Permissions-Policy: camera=(), geolocation=(), interest-cohort=(), microphone=(s
 Cross-Origin-Opener-Policy: same-origin
 ```
 
-`style-src 'unsafe-inline'` is required by the CSS-in-JS that Tailwind and React
-emit. `connect-src` includes the Firebase and Google endpoints so the SDK can
-reach them; nothing else is allowed.
+The CSP is nonce-based rather than relying on `'unsafe-inline'` for scripts:
+the App Router hydrates with inline `<script>` tags, so a bare
+`script-src 'self'` would block hydration outright ("Loading words…" forever).
+Next.js reads the nonce back out of the header and stamps it onto its own
+inline scripts automatically. `connect-src 'self'` is deliberately tight — the
+app talks to no third party at all, so API, SSE and `blob:` media playback are
+all same-origin. `CSP_MODE=report-only` / `off` and
+`ENABLE_SECURITY_HEADERS=false` are escape hatches for local debugging only.
 
 ## Rate limiting
 
-See the table in [`api.md`](./api.md#rate-limits). Counters live in the data
-provider, keyed by client IP + route (+ email where relevant), so credential
-stuffing and secret-code brute forcing are blunted even before the (already
-useless) secret code is guessed.
+See the table in [`api.md`](./api.md#rate-limits). Counters live in
+process-local Maps in both providers, keyed by client IP + route (+ email where
+relevant), so credential stuffing and secret-code brute forcing are blunted per
+instance even before the (already useless) secret code is guessed.
 
 ## Audit logging
 
-`adminAuditLogs` records, at minimum: secret-code changes (with a salted
-fingerprint, never the plaintext), user status changes, conversation
-inspections, and **every** administrative media read. Entries carry the actor's
-uid, email, IP and a metadata map. There is no code path that deletes or edits an
-audit entry.
+`AuditLog` records, at minimum: secret-code changes (with a salted fingerprint,
+never the plaintext), user status changes and conversation inspections;
+`AdminAccessLog` records every administrator read of someone else's data,
+**including every** administrative media-byte read. Entries carry the actor's
+uid, IP, user agent and a metadata map. There is no code path that deletes or
+edits an audit entry.
 
 ## Privacy limitations (honest)
 
 - **Deletion is soft.** Deleting a message or a photo hides it from users and
   keeps the row (and the bytes) for administrators. If your threat model requires
   true erasure, you must add a hard-delete job — the schema keeps
-  `metadata.originalText` and the Storage object precisely so an administrator
+  `metadata.originalText` and the storage object precisely so an administrator
   can still inspect what was removed.
 - **The server can read everything.** Messages are not end-to-end encrypted. An
-  attacker with the Firebase Admin credentials, or with database access, can read
-  all content.
+  attacker with database access can read all content.
 - **Delivery and read receipts are best effort** over SSE; a client that is
   offline simply does not advance them.
 
@@ -179,17 +185,18 @@ guarantee**, and the UI says so.
 
 ## Production checklist
 
-- `APP_SECRET` is a long random value (`openssl rand -hex 32`), at least 16
+- `APP_SECRET` is a long random value (`openssl rand -hex 32`), at least 32
   characters — it signs access sessions and challenge tokens.
 - `ADMIN_UID` is set (canonical) — `ADMIN_EMAIL` is a development convenience.
 - The bootstrap secret code (`SEED_SECRET_CODE`) has been changed in
   `/admin/settings` using the `rotate` strategy.
-- `DATA_PROVIDER=firestore`, `STORAGE_PROVIDER=firebase`, and both Firebase
-  credential blocks set (web config for the browser, service account for the
-  Admin SDK). Email/Password is enabled in the Firebase console.
+- `DATA_PROVIDER=prisma` with a `DATABASE_URL` that is not the dev default, and
+  `STORAGE_PROVIDER=local` (with a `STORAGE_LOCAL_DIR` outside the repo) or
+  `s3` (with `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`).
 - A TURN server is configured; STUN alone fails behind symmetric NATs.
-- Firestore and Storage rules are deployed, and `firebase deploy` is part of the
-  release process.
+- TLS terminates at the reverse proxy (or the app), Postgres only listens
+  locally, and database backups are scheduled — see
+  [`deploy.md`](./deploy.md).
 
 The fallback providers call `assertFallbackAllowed()`, which throws when
 `NODE_ENV=production && APP_ENV=production`. A misconfigured production

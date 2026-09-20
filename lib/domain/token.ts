@@ -5,8 +5,8 @@ import { base64UrlDecodeString, base64UrlEncodeString, timingSafeEqual } from '@
  *
  * Used for the secret-code access session and its challenge token. It is
  * deliberately tiny and dependency free so the same verification can run in a
- * Next.js route handler, an edge runtime and the test suite. Firebase ID tokens
- * are *not* handled here — those are verified with the Admin SDK.
+ * Next.js route handler, an edge runtime and the test suite. User sessions
+ * are *not* handled here — those are database-backed (see `lib/auth/session.ts`).
  */
 export interface TokenClaims extends Record<string, unknown> {
   /** Audience, e.g. `access-session` or `access-challenge`. */

@@ -3,29 +3,26 @@ import type { UserRecord } from '../data/types';
 /**
  * Where a verified credential came from.
  *
- *  - `id-token`       `Authorization: Bearer <Firebase ID token>`, the credential
- *                     the browser SDK holds. Short lived (1 hour, refreshed by the
- *                     SDK) and the only credential that can be exchanged for a
- *                     session cookie.
- *  - `session-cookie` the httpOnly `mt_session` cookie, whose value is a Firebase
- *                     session cookie minted by this API. Long lived, and the only
- *                     credential a browser can present on an `EventSource`
- *                     request (the SSE streams cannot set headers).
+ * Sessions are opaque 256-bit tokens, stored hashed (SHA-256) in the database
+ * (`UserSession`) and presented either as `Authorization: Bearer <token>` or
+ * as the httpOnly `mt_session` cookie. The cookie is the only credential a
+ * browser can present on an `EventSource` request (SSE streams cannot set
+ * headers).
  */
-export type CredentialSource = 'id-token' | 'session-cookie';
+export type CredentialSource = 'session-cookie';
 
 export interface VerifiedToken {
-  /** Firebase uid — the canonical identity of an account in this application. */
+  /** User id — the canonical identity of an account in this application. */
   uid: string;
   email: string;
-  /** Firebase display name, when the account has one. Never trusted as an id. */
+  /** Display name, when the account has one. Never trusted as an id. */
   displayName: string | null;
-  /** Seconds since epoch when the user last authenticated (Firebase `auth_time`). */
+  /** Seconds since epoch when the session was created. */
   authTime: number;
   /**
-   * The `role: 'admin'` custom claim, when present. Reported for diagnostics
-   * only: API authorisation is decided by `isAdminUser()` from the server
-   * environment, never by a claim a client could ask to have set.
+   * Whether the user is the configured administrator. Computed server side
+   * by `isAdminUser()` from `ADMIN_UID`/`ADMIN_EMAIL` on every request —
+   * never stored on the session and never trusted from the client.
    */
   isAdminClaim: boolean;
   source: CredentialSource;
