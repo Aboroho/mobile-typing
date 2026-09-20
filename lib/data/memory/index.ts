@@ -40,6 +40,7 @@ import type {
   UserRepo,
   ViewOnceClaim,
 } from '../types';
+import { UniqueConstraintError } from '../types';
 import { afterCursor, compareNewestFirst, encodeCursor, getStore, paginate, resetStore } from './store';
 
 function nowIso(): Timestamp {
@@ -55,12 +56,46 @@ class MemoryUsers implements UserRepo {
     return getStore().users as Map<string, UserRecord>;
   }
 
+  /**
+   * The Argon2 hash lives in its own collection, mirroring the
+   * `User.passwordHash` column: it is deliberately *not* a field on the
+   * `UserRecord`, so code that reads a record cannot see it (exactly like the
+   * Prisma provider, whose `mapUser()` omits the column).
+   */
+  private get hashes() {
+    return getStore().passwordHashes as Map<string, string>;
+  }
+
   async create(record: UserRecord): Promise<UserRecord> {
+    this.assertEmailFree(record.email, record.id);
     if (this.store.has(record.id)) {
       throw new Error(`user ${record.id} already exists`);
     }
     this.store.set(record.id, { ...record });
     return { ...record };
+  }
+
+  async createWithPasswordHash(record: UserRecord, passwordHash: string): Promise<UserRecord> {
+    const created = await this.create(record);
+    this.hashes.set(created.id, passwordHash);
+    return { ...created };
+  }
+
+  async getPasswordHash(userId: string): Promise<string | null> {
+    return this.hashes.get(userId) ?? null;
+  }
+
+  /**
+   * Mirrors the `User.emailNormalized` unique index. Without it a double
+   * submit only fails on PostgreSQL, which is how the signup bug stayed hidden
+   * behind the in-memory test provider.
+   */
+  private assertEmailFree(email: string, exceptId?: string): void {
+    const normalized = email.trim().toLowerCase();
+    const clash = values(this.store).find(
+      (user) => user.email.toLowerCase() === normalized && user.id !== exceptId,
+    );
+    if (clash) throw new UniqueConstraintError('User', 'emailNormalized');
   }
 
   async getById(userId: string): Promise<UserRecord | null> {
@@ -77,6 +112,9 @@ class MemoryUsers implements UserRepo {
   async update(userId: string, patch: Partial<UserRecord>): Promise<UserRecord | null> {
     const record = this.store.get(userId);
     if (!record) return null;
+    if (patch.email !== undefined && patch.email.toLowerCase() !== record.email.toLowerCase()) {
+      this.assertEmailFree(patch.email, userId);
+    }
     const next = { ...record, ...patch, updatedAt: nowIso() };
     this.store.set(userId, next);
     return { ...next };
@@ -217,6 +255,15 @@ class MemoryMessages implements MessageRepo {
   }
 
   async create(message: Message): Promise<Message> {
+    // Mirrors `@@unique([conversationId, senderId, clientMessageId])`: a
+    // concurrent retry of the same logical message must not produce two rows.
+    const clash = values(this.store).find(
+      (other) =>
+        other.conversationId === message.conversationId &&
+        other.senderId === message.senderId &&
+        other.clientMessageId === message.clientMessageId,
+    );
+    if (clash) throw new UniqueConstraintError('Message', 'clientMessageId');
     this.store.set(message.id, { ...message });
     return { ...message };
   }
@@ -573,6 +620,13 @@ class MemoryOutbox implements OutboxRepo {
   async claimPending(limit: number): Promise<OutboxEventRecord[]> {
     const pending = this.store.filter((e) => e.deliveredAt === null).slice(0, limit);
     return pending;
+  }
+  async pruneOlderThan(cutoff: Date): Promise<number> {
+    const before = this.store.length;
+    const kept = this.store.filter((e) => e.createdAt.getTime() > cutoff.getTime());
+    this.store.length = 0;
+    this.store.push(...kept);
+    return before - kept.length;
   }
 }
 

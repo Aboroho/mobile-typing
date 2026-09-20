@@ -103,16 +103,37 @@ INVALID_BODY` with per-field detail.
 Cross-cutting behaviour in middleware order: `proxy.ts` (request id, security
 headers incl. CSP) → route auth → per-endpoint rate limits → service.
 
-**Realtime.** Mutations publish in-process on the realtime bus
-(`lib/realtime/bus.ts`) and persist outbox events (`lib/realtime/outbox.ts`) to
-the provider; the outbox worker re-publishes pending events so reconnecting
-clients can resume from `?since=<eventId>`. SSE streams
-(`/conversations/{id}/events`, `/calls/events`) are the primary realtime
-channel (see `docs/api.md` for the event shapes); `server.ts` adds a
-token-authenticated WebSocket endpoint at `/api/v1/ws` for bidirectional traffic
-(e.g. typing indicators). Multi-instance deployments need a shared bus — the
-documented upgrade is a single shared outbox poller driven by Postgres
-`LISTEN`/`NOTIFY` or Redis Streams.
+**Realtime.** The **outbox is the durable truth**. A mutation writes an
+`OutboxEvent` row (one per recipient) in the same transaction as the data it
+describes, publishes it on the in-process bus (`lib/realtime/bus.ts`), then
+marks the rows delivered. `runOutboxWorker()` (`lib/realtime/outbox.ts`)
+republishes any row still un-delivered after a short grace period, so a failed
+publish is recovered rather than lost. Because every event id is
+time-ordered, a client reconnects with `since: <lastEventId>` and the server
+replays exactly the missed rows. `LISTEN`/`NOTIFY` is only ever a wake-up
+hint — a missed notification delays a delivery by one poll, it never loses one.
+
+Two transports deliver those events:
+
+* **WebSocket** at `/api/v1/ws`, mounted by `server.ts` on the same port as
+  Next.js (`lib/ws/server.ts`). Authenticated from the `mt_session` cookie or an
+  `Authorization: Bearer` header *before* the socket is accepted — an
+  unauthenticated upgrade is refused with `401`. Frames are described in
+  `docs/api.md#websocket`. Per-socket subscriptions are validated against
+  conversation membership, and every outbound frame is filtered to the
+  recipient, so one socket can never observe another user's conversation.
+* **SSE** per conversation (`/conversations/{id}/events`) and per user
+  (`/calls/events`). The browser client uses this as an automatic fallback when
+  no WebSocket is available, so `next dev` (which cannot mount the upgrade
+  handler) still receives every durable event.
+
+Typing indicators are the one exception: they are ephemeral by design and never
+touch the database. They ride the same socket (or `POST /conversations/{id}/
+typing` over REST) and expire client-side after a few seconds.
+
+Multi-instance deployments need a shared bus — the documented upgrade is a
+single shared outbox poller driven by Postgres `LISTEN`/`NOTIFY` or Redis
+Streams.
 
 Money-quote for contributors: **validate → authenticate → service → provider →
 respond**, realtime via bus + outbox, and no direct Prisma/DB access outside the
@@ -121,8 +142,34 @@ data providers.
 ## 5. Access gate and startup check
 
 The public surface is the typing game. Before reconsidering this design, find
-the code: unlock logic in `lib/access/*`, gate state in `stores/access.ts`,
-lock triggers in `components/` (triple-tap) and `app/` (visibility change).
+the code: unlock logic in `lib/access/*`, gate state in `stores/access-store.ts`,
+and the lock triggers in `hooks/use-hide-chat.ts` (which every trigger funnels
+into).
+
+## 6. Hiding the chat
+
+Three triggers, one handler:
+
+| Trigger | Where | Rule |
+| --- | --- | --- |
+| Header **Hide** button | `components/messages/chat-screen.tsx` | One tap, always available. |
+| **Double tap** in the message area | `lib/browser/double-tap.ts` + `hooks/use-double-tap.ts` | Two taps within 350 ms and 48 px of each other, on touch *or* pointer devices. A single tap never hides anything. |
+| **Tab hidden for 60 s** | `lib/browser/visibility-policy.ts` + `hooks/use-visibility-lock.ts` | `visibilitychange`, `pagehide` and `blur` start the timer; `pageshow`, `focus` and becoming visible cancel it and restore the *full* grace period. |
+
+Deliberate details, each covered by a test:
+
+* A double tap on an `input`, `textarea`, `button`, `a`, audio/video control or
+  anything marked `data-no-double-tap` is ignored — selecting text or tapping
+  the emoji picker must not hide the conversation.
+* Mobile browsers fire a synthesised mouse event after a touch, so the detector
+  de-duplicates by pointer type and timestamp; one physical tap is one gesture.
+* **A plain window blur never hides the chat.** Switching apps for a second and
+  coming back must not lose the thread; only the 60-second hidden timer does.
+* Locking also ends any active call, so a hidden screen is not still
+  transmitting audio.
+
+Hiding is cosmetic. Every API route authenticates and authorizes on its own,
+so a locked screen protects nothing that the server was not already protecting.
 
 The typing game is configured by `NEXT_PUBLIC_ENABLE_TYPING_GAME` (default
 `true`). When disabled, the gate is bypassed: visitors land directly on

@@ -139,6 +139,8 @@ export class CallManager {
 
   /** Called when the call is answered; starts the visible duration counter. */
   markActive(): void {
+    // A late `ontrack`/`connected` after hangup must not resurrect the timer.
+    if (this.disposed || this.durationTimer !== null) return;
     this.startedAt = Date.now();
     this.setState('active');
     this.durationTimer = window.setInterval(() => {
@@ -157,6 +159,7 @@ export class CallManager {
   }
 
   private teardown(state: CallClientState): void {
+    if (this.disposed) return;
     if (this.durationTimer !== null) {
       clearInterval(this.durationTimer);
       this.durationTimer = null;
@@ -167,6 +170,9 @@ export class CallManager {
     this.peerConnection = null;
     if (this.remoteAudio) {
       this.remoteAudio.srcObject = null;
+      // Remove the element too, otherwise every call leaves an <audio> node
+      // behind in the document.
+      this.remoteAudio.remove();
       this.remoteAudio = null;
     }
     this.queuedCandidates = [];

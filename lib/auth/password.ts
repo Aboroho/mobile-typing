@@ -40,7 +40,6 @@ export async function hashPassword(plaintext: string): Promise<string> {
     return await hashWithArgon2(plaintext);
   } catch (err) {
     // If argon2 native binding fails, fall back to scrypt.
-    // eslint-disable-next-line no-console
     console.warn('[auth] argon2 unavailable, falling back to scrypt:', (err as Error).message);
     return hashWithScrypt(plaintext);
   }

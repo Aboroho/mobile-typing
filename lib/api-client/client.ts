@@ -104,6 +104,19 @@ export interface ApiClientInit {
   onResponse?: (response: { ok: boolean; status: number; code?: string }) => void;
 }
 
+/**
+ * Correlation id sent with every request as `x-request-id`.
+ *
+ * The server echoes it in the response header and includes it in every log
+ * line, so one browser action can be followed through the API logs. Generated
+ * per call, never derived from user data.
+ */
+function newRequestId(): string {
+  const cryptoRef = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (cryptoRef && typeof cryptoRef.randomUUID === 'function') return cryptoRef.randomUUID();
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
@@ -137,6 +150,7 @@ export function createApiClient(init: ApiClientInit = {}) {
   async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const headers: Record<string, string> = {
       Accept: 'application/json',
+      'x-request-id': newRequestId(),
       ...(options.headers ?? {}),
     };
     if (options.body !== undefined && !(options.body instanceof FormData)) {

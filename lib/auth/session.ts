@@ -88,16 +88,37 @@ export async function createSession(input: {
   };
 }
 
-export async function verifySession(request?: Request): Promise<VerifiedSession | null> {
+/**
+ * Credential extraction that works for both shapes this codebase hands in:
+ * a WHATWG `Request` (API routes, whose `headers` is a `Headers` object) and a
+ * Node `IncomingMessage` (the WebSocket upgrade, whose `headers` is a plain
+ * object). Treating the latter as a `Request` silently yields no token, which
+ * is how every authenticated socket used to be rejected with 401.
+ */
+function readCredential(
+  request: Request | { headers: Record<string, string | string[] | undefined> },
+): string | null {
+  const headers = request.headers as Headers | Record<string, string | string[] | undefined>;
+  const get = (name: string): string | null => {
+    if (typeof (headers as Headers).get === 'function') {
+      return (headers as Headers).get(name);
+    }
+    const value = (headers as Record<string, string | string[] | undefined>)[name];
+    if (Array.isArray(value)) return value[0] ?? null;
+    return value ?? null;
+  };
+
+  const auth = get('authorization');
+  if (auth && auth.startsWith('Bearer ')) return auth.slice('Bearer '.length).trim();
+  return readCookieFromHeader(get('cookie') ?? '', SESSION_COOKIE_NAME);
+}
+
+export async function verifySession(
+  request?: Request | { headers: Record<string, string | string[] | undefined> },
+): Promise<VerifiedSession | null> {
   let token: string | null = null;
   if (request) {
-    const auth = request.headers.get('authorization');
-    if (auth && auth.startsWith('Bearer ')) {
-      token = auth.slice('Bearer '.length).trim();
-    } else {
-      const cookieHeader = request.headers.get('cookie') ?? '';
-      token = readCookieFromHeader(cookieHeader, SESSION_COOKIE_NAME);
-    }
+    token = readCredential(request);
   } else {
     try {
       const jar = await cookies();
@@ -144,7 +165,9 @@ export async function getCurrentUser(request?: Request): Promise<UserRecord | nu
   return data.users.getById(verified.uid);
 }
 
-export async function verifyRequestToken(request?: Request): Promise<VerifiedSession | null> {
+export async function verifyRequestToken(
+  request?: Request | { headers: Record<string, string | string[] | undefined> },
+): Promise<VerifiedSession | null> {
   return verifySession(request);
 }
 

@@ -64,6 +64,8 @@ export function paginate<T extends { id: string }>(
 
 interface StoreShape {
   users: Map<string, unknown>;
+  /** Argon2 hashes, keyed by user id — mirrors the `User.passwordHash` column. */
+  passwordHashes: Map<string, string>;
   sessions: Map<string, unknown>;
   conversations: Map<string, unknown>;
   messages: Map<string, unknown>;
@@ -89,6 +91,7 @@ export function getStore(): StoreShape {
   if (!target[GLOBAL_KEY]) {
     target[GLOBAL_KEY] = {
       users: new Map(),
+      passwordHashes: new Map(),
       sessions: new Map(),
       conversations: new Map(),
       messages: new Map(),

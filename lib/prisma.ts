@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- see lib/data/prisma/index.ts */
 /**
  * Prisma client singleton.
  *
@@ -9,7 +10,6 @@
 import { env } from './env';
 import { logger } from './logger';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _prisma: any = null;
 
 async function loadPrismaClient(): Promise<any> {
@@ -43,7 +43,6 @@ export async function getPrisma(): Promise<any> {
 
 // Re-export a synchronous getter for code paths that already know Prisma is
 // available (e.g. inside the PrismaDataProvider which gated on loadPrismaClient).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function prismaSync(): any {
   if (!_prisma) {
     throw new Error('Prisma client not initialised. Await getPrisma() first.');

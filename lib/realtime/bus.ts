@@ -51,6 +51,24 @@ export function subscribe(topic: string, handler: Handler): () => void {
   };
 }
 
+/**
+ * Whether `event` may be forwarded to `userId`.
+ *
+ * Every payload that carries per-viewer data is tagged with the recipient it
+ * was rendered for (`forUserId`) or, for acknowledgements, with the *other*
+ * participant it is meant for (`otherUserId`). Both the SSE route and the
+ * WebSocket server run events through this single predicate, so a subscriber
+ * can never receive a frame rendered for somebody else — even if it is
+ * connected to the same topic.
+ */
+export function eventAddressedTo(event: Pick<RealtimeEvent, 'payload'>, userId: string): boolean {
+  const payload = event.payload as { forUserId?: string; otherUserId?: string } | null;
+  if (!payload || typeof payload !== 'object') return true;
+  if (typeof payload.forUserId === 'string') return payload.forUserId === userId;
+  if (typeof payload.otherUserId === 'string') return payload.otherUserId === userId;
+  return true;
+}
+
 export const topics = {
   messages: (conversationId: string) => `conversation:${conversationId}:messages`,
   conversation: (conversationId: string) => `conversation:${conversationId}`,

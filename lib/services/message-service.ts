@@ -19,7 +19,8 @@ import type { CallView, Cursor,
 import { newId, nowIso } from '@mt/utils';
 import type { SendMessageResponse } from '@mt/api-client';
 import { getData, type UserRecord } from '../data';
-import { publish, topics } from '../realtime/bus';
+import { topics } from '../realtime/bus';
+import { publishEvent } from '../realtime/outbox';
 import { logger } from '../logger';
 import { getConversationView, requireParticipant } from './conversation-service';
 import { buildMediaView } from './media-view';
@@ -167,15 +168,32 @@ export async function sendMessage(input: {
     });
   }
 
-  publish(topics.messages(input.conversationId), 'message.created', {
-    conversationId: input.conversationId,
-    message: toVisibleMessage(created, recipientId),
-    forUserId: recipientId,
-  });
-  publish(topics.messages(input.conversationId), 'message.created', {
-    conversationId: input.conversationId,
-    message: toVisibleMessage(created, input.actor.id),
-    forUserId: input.actor.id,
+  // Durable fan-out: the outbox rows are written before anything is published,
+  // so a client that reconnects a moment later can replay this event instead of
+  // losing it. Each recipient gets the message rendered for *them*.
+  await publishEvent({
+    topic: topics.messages(input.conversationId),
+    type: 'message.created',
+    recipients: [
+      {
+        userId: recipientId,
+        payload: {
+          eventId: created.id,
+          conversationId: input.conversationId,
+          message: toVisibleMessage(created, recipientId),
+          forUserId: recipientId,
+        },
+      },
+      {
+        userId: input.actor.id,
+        payload: {
+          eventId: created.id,
+          conversationId: input.conversationId,
+          message: toVisibleMessage(created, input.actor.id),
+          forUserId: input.actor.id,
+        },
+      },
+    ],
   });
 
   return {
@@ -248,9 +266,20 @@ export async function editMessage(input: {
     });
   }
 
-  publish(topics.messages(message.conversationId), 'message.updated', {
-    conversationId: message.conversationId,
-    message: toVisibleMessage(updated, input.actor.id),
+  await publishEvent({
+    topic: topics.messages(message.conversationId),
+    type: 'message.updated',
+    recipients: conversation
+      ? conversation.participantIds.map((userId) => ({
+          userId,
+          payload: {
+            eventId: `updated_${updated.id}_${updated.updatedAt}`,
+            conversationId: message.conversationId,
+            message: toVisibleMessage(updated, userId),
+            forUserId: userId,
+          },
+        }))
+      : [],
   });
 
   return {
@@ -317,12 +346,25 @@ export async function deleteMessage(input: {
       lastMessage: messagePreviewFor(updated, otherParticipant(conversation, input.actor.id)),
     });
   }
-  if (updated) {
-    publish(topics.messages(message.conversationId), 'message.deleted', {
-      conversationId: message.conversationId,
-      messageId: message.id,
-      scope: input.scope,
-      actorId: input.actor.id,
+  if (updated && conversation) {
+    const recipients =
+      input.scope === 'me'
+        ? [input.actor.id]
+        : conversation.participantIds.filter((userId) => userId !== input.actor.id);
+    await publishEvent({
+      topic: topics.messages(message.conversationId),
+      type: 'message.deleted',
+      recipients: recipients.map((userId) => ({
+        userId,
+        payload: {
+          eventId: `deleted_${message.id}_${input.scope}_${userId}`,
+          conversationId: message.conversationId,
+          messageId: message.id,
+          scope: input.scope,
+          actorId: input.actor.id,
+          forUserId: userId,
+        },
+      })),
     });
   }
   logger.info('message.deleted', { scope: input.scope, messageId: input.messageId });
@@ -355,7 +397,15 @@ export async function listMessages(input: {
   };
 }
 
-/** Recipient side acknowledgement: sent → delivered → read. */
+/**
+ * Recipient-side acknowledgement: sent → delivered → read.
+ *
+ * Only the intended recipient may move a receipt forward (`canMarkDelivered`
+ * checks both conversation membership and that the actor is *not* the sender),
+ * the transition is monotonic, and a message whose state already matches is
+ * skipped so a chatty client cannot rewrite identical rows. The resulting
+ * change is fanned out to the sender over the durable outbox.
+ */
 export async function markDelivered(input: {
   actor: UserRecord;
   conversationId: string;
@@ -365,24 +415,26 @@ export async function markDelivered(input: {
   const data = await getData();
   const conversation = await requireParticipant(input.conversationId, input.actor.id);
   const now = nowIso();
-  let updated = 0;
+  const updatedMessageIds: string[] = [];
+  // One id per message; a huge batch would otherwise become a long serial loop.
+  const uniqueIds = Array.from(new Set(input.messageIds)).slice(0, 100);
 
-  for (const messageId of input.messageIds) {
+  for (const messageId of uniqueIds) {
     const message = await data.messages.getById(messageId);
     if (!message || message.conversationId !== input.conversationId) continue;
     if (!canMarkDelivered(message, input.actor.id)) continue;
     const nextState: DeliveryState = nextDeliveryState(message.deliveryState, input.state);
     if (nextState === message.deliveryState) continue;
-    await data.messages.update(messageId, {
+    const updated = await data.messages.update(messageId, {
       deliveryState: nextState,
       deliveredAt: message.deliveredAt ?? now,
       readBy: input.state === 'read' ? Array.from(new Set([...message.readBy, input.actor.id])) : message.readBy,
       readAt: input.state === 'read' ? now : message.readAt,
     });
-    updated += 1;
+    if (updated) updatedMessageIds.push(messageId);
   }
 
-  if (updated > 0) {
+  if (updatedMessageIds.length > 0) {
     if (input.state === 'read') {
       await data.conversations.updateParticipant(input.conversationId, input.actor.id, {
         lastReadAt: now,
@@ -390,15 +442,26 @@ export async function markDelivered(input: {
         unreadCount: 0,
       });
     }
-    publish(topics.messages(input.conversationId), 'message.delivery', {
-      conversationId: input.conversationId,
-      messageIds: input.messageIds,
-      state: input.state,
-      userId: input.actor.id,
-      otherUserId: otherParticipant(conversation, input.actor.id),
+    const senderId = otherParticipant(conversation, input.actor.id);
+    await publishEvent({
+      topic: topics.messages(input.conversationId),
+      type: input.state === 'read' ? 'message.read' : 'message.delivered',
+      recipients: [
+        {
+          userId: senderId,
+          payload: {
+            eventId: `${input.state}_${input.conversationId}_${input.actor.id}_${updatedMessageIds.join(',')}`,
+            conversationId: input.conversationId,
+            messageIds: updatedMessageIds,
+            state: input.state,
+            userId: input.actor.id,
+            otherUserId: senderId,
+          },
+        },
+      ],
     });
   }
-  return updated;
+  return updatedMessageIds.length;
 }
 
 export async function getVisibleMessage(input: {

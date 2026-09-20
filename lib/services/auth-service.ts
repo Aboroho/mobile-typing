@@ -1,6 +1,7 @@
 import { AppError, sanitizeName } from '@mt/domain';
 import { nowIso, newUid } from '@mt/utils';
 import { getData, type UserRecord } from '../data';
+import { isUniqueConstraintError } from '../data/types';
 import { hashPassword, verifyPassword } from '../auth/password';
 import { createSession, clearSessionCookie, verifySession, revokeAllSessionsForUser, isAdminUser, type CookieInstruction } from '../auth/session';
 import { logger } from '../logger';
@@ -10,6 +11,13 @@ export interface AuthOutcome {
   token: null;
   cookieSession: boolean;
   session: CookieInstruction | null;
+  /**
+   * `true` when the account was created by this request, `false` when the
+   * caller submitted credentials for an account that already existed (a
+   * duplicate submit or a browser retry). The route maps this onto 201 vs 200
+   * so a client can tell "created" from "already yours" — both are success.
+   */
+  created: boolean;
 }
 
 /** Helper for rate-limit subject key. */
@@ -26,8 +34,18 @@ export async function getMe(request: Request): Promise<UserRecord | null> {
 }
 
 /**
- * Registration: password is verified against Argon2, the user record is
- * created, and a fresh session cookie is issued. Idempotent on email+password.
+ * Registration.
+ *
+ * Contract:
+ *  - a new email creates exactly one account and issues a fresh session cookie;
+ *  - a repeat submit for an existing email with the *correct* password is
+ *    idempotent — it re-issues a session instead of failing. This is what makes
+ *    a double-clicked button, a browser retry or a client bug harmless rather
+ *    than a false "cannot create account" error on an account that exists;
+ *  - a repeat submit with the *wrong* password is rejected with the same
+ *    generic 401 used by login, so accounts cannot be enumerated;
+ *  - two concurrent submits of the same email cannot create two accounts: the
+ *    loser of the unique-constraint race re-reads the row and signs in.
  */
 export async function register(input: {
   name: string;
@@ -40,15 +58,8 @@ export async function register(input: {
 
   const existing = await data.users.getByEmail(email);
   if (existing) {
-    // To avoid account enumeration, respond exactly as we would for login but
-    // do NOT create a new account. A password mismatch becomes a generic 401.
-    const ok = await verifyPassword(input.password, (existing as unknown as { passwordHash?: string }).passwordHash ?? '$invalid$');
-    if (!ok) {
-      logger.warn('auth.register_email_taken_wrong_password', { email });
-      throw AppError.unauthenticated('unable to create an account with those details');
-    }
-    logger.warn('auth.register_email_taken_reissues_session', { email });
-    return loginForUser(existing, input.request);
+    const outcome = await sessionForExistingAccount(existing, input.password, 'email_taken', input.request);
+    return { ...outcome, created: false };
   }
 
   const passwordHash = await hashPassword(input.password);
@@ -66,14 +77,22 @@ export async function register(input: {
     updatedAt: now,
     disabledReason: null,
   };
-  // Persist password hash separately since the UserRecord interface does not
-  // expose it to callers above the data layer. We write it directly via Prisma
-  // when DATA_PROVIDER=prisma; the memory provider stores it alongside the
-  // record in its Map for dev/test parity.
-  await createUserWithHash(record, passwordHash);
-  await data.users.touchLogin(record.id, now);
-  logger.info('auth.profile_created', { uid: record.id });
-  return loginForUser(record, input.request);
+
+  try {
+    // One write for the row and its hash column — no half-created account.
+    const created = await data.users.createWithPasswordHash(record, passwordHash);
+    logger.info('auth.profile_created', { uid: created.id });
+    return { ...(await loginForUser(created, input.request)), created: true };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    // Lost a race with a concurrent submit of the same email. The other
+    // request already committed the account, so treat this one as a login.
+    const winner = await data.users.getByEmail(email);
+    if (!winner) throw error;
+    logger.warn('auth.register_race_recovered', { uid: winner.id });
+    const outcome = await sessionForExistingAccount(winner, input.password, 'race', input.request);
+    return { ...outcome, created: false };
+  }
 }
 
 /**
@@ -93,7 +112,11 @@ export async function login(input: {
     logger.warn('auth.login_unknown_email', { email });
     throw AppError.unauthenticated('unable to sign in with those details');
   }
-  const hash = await getPasswordHash(record.id);
+  if (record.status === 'disabled') {
+    logger.warn('auth.login_disabled', { uid: record.id });
+    throw AppError.unauthenticated('unable to sign in with those details');
+  }
+  const hash = await data.users.getPasswordHash(record.id);
   if (!hash) {
     logger.warn('auth.login_missing_hash', { uid: record.id });
     throw AppError.unauthenticated('unable to sign in with those details');
@@ -103,12 +126,8 @@ export async function login(input: {
     logger.warn('auth.login_bad_password', { uid: record.id });
     throw AppError.unauthenticated('unable to sign in with those details');
   }
-  if (record.status === 'disabled') {
-    logger.warn('auth.login_disabled', { uid: record.id });
-    throw AppError.unauthenticated('unable to sign in with those details');
-  }
   await data.users.touchLogin(record.id, nowIso());
-  return loginForUser(record, input.request);
+  return { ...(await loginForUser(record, input.request)), created: false };
 }
 
 /**
@@ -126,11 +145,11 @@ export async function reauthenticate(input: {
   const data = await getData();
   const record = await data.users.getById(verified.uid);
   if (!record) throw AppError.unauthenticated('sign in again to continue');
-  const hash = await getPasswordHash(record.id);
+  const hash = await data.users.getPasswordHash(record.id);
   if (!hash || !(await verifyPassword(input.password, hash))) {
     throw AppError.unauthenticated('password is incorrect');
   }
-  return loginForUser(record, input.request);
+  return { ...(await loginForUser(record, input.request)), created: false };
 }
 
 export async function logout(request: Request): Promise<{ revoked: boolean; clearCookie: CookieInstruction }> {
@@ -143,9 +162,43 @@ export async function logout(request: Request): Promise<{ revoked: boolean; clea
   return { revoked: count > 0, clearCookie: clearSessionCookie() };
 }
 
-async function loginForUser(user: UserRecord, request: Request): Promise<AuthOutcome> {
-  const userAgent = request.headers.get('user-agent');
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+/**
+ * Verifies the password for an account that already exists and returns a fresh
+ * session. Used by both the "email already registered" branch and the
+ * unique-constraint race recovery.
+ *
+ * The hash is read through `users.getPasswordHash()`, which selects only the
+ * `User.passwordHash` column. It is deliberately *not* a field on the
+ * `UserRecord`: reading it off the record silently yields `undefined` against
+ * PostgreSQL and "works" against the in-memory provider, which is exactly how
+ * a successful signup used to be reported as a failure.
+ */
+async function sessionForExistingAccount(
+  existing: UserRecord,
+  password: string,
+  reason: 'email_taken' | 'race',
+  request: Request,
+): Promise<Omit<AuthOutcome, 'created'>> {
+  const data = await getData();
+  const hash = await data.users.getPasswordHash(existing.id);
+  const ok = hash ? await verifyPassword(password, hash) : false;
+  if (!ok) {
+    // Same message as an unknown email/invalid login: no account enumeration.
+    logger.warn('auth.register_email_taken_wrong_password', { uid: existing.id, reason });
+    throw AppError.unauthenticated('unable to create an account with those details');
+  }
+  if (existing.status === 'disabled') {
+    logger.warn('auth.register_disabled', { uid: existing.id });
+    throw AppError.unauthenticated('unable to create an account with those details');
+  }
+  logger.info('auth.register_idempotent_session', { uid: existing.id, reason });
+  await data.users.touchLogin(existing.id, nowIso());
+  return loginForUser(existing, request);
+}
+
+async function loginForUser(user: UserRecord, request?: Request): Promise<Omit<AuthOutcome, 'created'>> {
+  const userAgent = request?.headers.get('user-agent') ?? null;
+  const ip = request?.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
   const cookie = await createSession({ userId: user.id, userAgent, ip });
   return {
     user: { ...user, isAdmin: isAdminUser(user) },
@@ -153,51 +206,4 @@ async function loginForUser(user: UserRecord, request: Request): Promise<AuthOut
     cookieSession: true,
     session: cookie,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Password-hash persistence helpers. These are deliberately small so the
-// memory and prisma providers don't need schema changes to hold a hash.
-// ---------------------------------------------------------------------------
-
-async function createUserWithHash(record: UserRecord, passwordHash: string): Promise<void> {
-  const data = await getData();
-  if (data.name === 'prisma') {
-    const { getPrisma } = await import('../prisma');
-    const prisma = await getPrisma();
-    await prisma.user.create({
-      data: {
-        id: record.id,
-        name: record.name,
-        email: record.email,
-        emailNormalized: record.email.toLowerCase(),
-        passwordHash,
-        photoUrl: record.photoUrl,
-        status: record.status,
-        disabledReason: record.disabledReason,
-        lastLoginAt: record.lastLoginAt ? new Date(record.lastLoginAt) : null,
-      },
-    });
-    return;
-  }
-  // Memory provider path: stash the hash on the Map entry directly.
-  const target = globalThis as unknown as Record<string, any>;
-  const store = target.__mt_memory_store_v1;
-  const users = store?.users as Map<string, UserRecord & { passwordHash?: string }> | undefined;
-  const created = await data.users.create(record);
-  users?.set(record.id, { ...created, passwordHash });
-}
-
-async function getPasswordHash(userId: string): Promise<string | null> {
-  const data = await getData();
-  if (data.name === 'prisma') {
-    const { getPrisma } = await import('../prisma');
-    const prisma = await getPrisma();
-    const row = await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
-    return (row as { passwordHash?: string | null } | null)?.passwordHash ?? null;
-  }
-  const target = globalThis as unknown as Record<string, any>;
-  const store = target.__mt_memory_store_v1;
-  const users = store?.users as Map<string, UserRecord & { passwordHash?: string }> | undefined;
-  return users?.get(userId)?.passwordHash ?? null;
 }

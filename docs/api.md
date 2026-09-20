@@ -70,12 +70,28 @@ JSON body over TLS and verified server-side against an Argon2id hash.
 
 | Method & path               | Auth                                               | Purpose                                                                                                                                                                                                                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/register`       | public (access session required to enter the chat) | Body `{ name, email, password }`. Creates the user with an Argon2id-hashed password and sets `mt_session`. Safe to retry: a known email with the correct password re-issues a session instead; a wrong password returns a generic 401 so accounts cannot be enumerated. Returns `{ user, token: null, cookieSession: true, accessGranted }`. Rate limited to 5/10 min. |
+| `POST /auth/register`       | public (access session required to enter the chat) | Body `{ name, email, password }`. Creates the user with an Argon2id-hashed password and sets `mt_session`. Returns `{ user, token: null, cookieSession: true, accessGranted, created }`. Rate limited to 5/10 min per email. |
 | `POST /auth/login`          | public                                             | Body `{ email, password }`. Verifies the password against the stored Argon2id hash and sets `mt_session`. Wrong password, unknown email and disabled account all produce the same 401 `UNAUTHENTICATED` with a generic message, so accounts cannot be enumerated. Rate limited to 8/10 min per email.                                                                  |
 | `POST /auth/reauthenticate` | session required, access optional                  | Body `{ password }`. Re-verifies the caller's password, re-mints `mt_session` and binds the access session to the user. Rate limited to 6/10 min.                                                                                                                                                                                                                      |
 | `POST /auth/logout`         | public                                             | Revokes the caller's session server-side (it stops authorising immediately) and clears `mt_session` and `mt_access`.                                                                                                                                                                                                                                                   |
 | `GET /auth/me`              | public                                             | `{ user }` or `{ user: null }` — 200 either way so a client can tell "signed out" from "API broken".                                                                                                                                                                                                                                                                   |
 | `PATCH /auth/profile`       | auth                                               | Body `{ name?, photoUrl? }`.                                                                                                                                                                                                                                                                                                                                           |
+
+Registration status codes are what make the sign-up UI honest — the client
+branches on them instead of guessing:
+
+| Status | `created` | Meaning | Client behaviour |
+| --- | --- | --- | --- |
+| `201` | `true` | New account, session cookie set. | Signed in. |
+| `200` | `false` | Email already existed **and** the password matched, so a session was (re-)issued. | Signed in. This is what a double-submitted form gets. |
+| `401` | — | Email exists but the password did not match. Generic message; indistinguishable from an unknown email. | Show "wrong password", never "cannot create account". |
+| `422` | — | Validation or password-policy failure. | Show the field errors. |
+| `429` | — | Rate limited. | Ask the caller to wait. |
+| `500` | — | The row could not be written, or the session could not be stored. **The only status that may report "cannot create account".** | Surface the error and let the caller retry; a retry that lands on `200` is a correct outcome. |
+
+The browser sends exactly one `POST /auth/register` per submit. Even so, the
+route is idempotent, so a retried or duplicated request can never report a
+failure for an account that exists.
 
 There is no password-reset route: reset by email is not implemented, and the
 sign-in UI reports "not configured" rather than pretending to send mail.
@@ -212,10 +228,34 @@ Client → server frames are JSON:
 - `{ "type": "subscribe", "conversations": ["c_1", …], "since": "<eventId>"? }`
   — (re)subscribes to those conversations, replays missed outbox events after
   `since` (or `?since=` from the upgrade URL), and is acknowledged with
-  `{ topic: 'system', type: 'subscribed', payload: { conversations } }`.
-- `{ "type": "ping" }` — answered with `{ topic: 'system', type: 'pong' }`.
+  `{ topic: 'system', type: 'subscribed', payload: { conversations, refused,
+  replayed, lastEventId } }`. `refused` lists the ids the caller is not a member
+  of; `replayed` counts the events just resent.
+- `{ "type": "typing", "conversationId": "c_1", "isTyping": true }` — ephemeral,
+  never persisted. The server re-stamps `userId` with the **authenticated**
+  sender, so a client cannot type as somebody else.
+- `{ "type": "ping" }` — answered with `{ topic: 'system', type: 'pong' }`. The
+  browser client also pings every 25 s; the server closes a socket silent for
+  longer than that.
 
 Server → client: a `{ topic: 'system', type: 'hello', payload: { userId,
 serverTime } }` greeting, then the same bus events the SSE streams carry
 (messages, typing, presence, calls, access revocation). Invalid frames get
-`{ topic: 'system', type: 'error', payload: { code: 'BAD_FRAME' } }`.
+`{ topic: 'system', type: 'error', payload: { code: 'BAD_FRAME' } }` and the
+socket stays open.
+
+Three guarantees worth knowing before changing this code:
+
+1. **Membership is checked per subscription**, not per connection. A socket
+   authenticated as Alice can still not subscribe to Bob's conversation.
+2. **Every frame is filtered to the recipient** before it is written, so an
+   event rendered for the peer never reaches the author's socket (and vice
+   versa).
+3. **Multiple sockets per user are supported.** A second tab does not evict the
+   first; both receive the same events, and each tracks its own `since` cursor.
+
+Reconnects use exponential backoff (1 s → 30 s, with jitter) and send the last
+event id, so no durable event is delivered twice and none is skipped. When the
+socket cannot be established at all, the browser client switches to SSE
+automatically — which is the path `next dev` uses, since only `npm run serve`
+mounts the upgrade handler.

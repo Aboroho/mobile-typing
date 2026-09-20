@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { parsePublicEnv } from '@mt/config';
 import { useAccessStore } from '@/stores/access-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { useRealtimeStore } from '@/stores/realtime-store';
 import { useKeystrokeUnlock } from '@/hooks/use-keystroke-unlock';
 import { useTripleTap } from '@/hooks/use-triple-tap';
 import { useVisibilityLock } from '@/hooks/use-visibility-lock';
+import { useHideChat } from '@/hooks/use-hide-chat';
 import { TypingGameScreen } from '@/components/typing-game/typing-game-screen';
 import { AuthPanel } from '@/components/auth/auth-panel';
 import { ConversationList } from '@/components/conversations/conversation-list';
@@ -38,10 +40,17 @@ export function AppShell() {
   const user = useAuthStore((state) => state.user);
   const initializing = useAuthStore((state) => state.initializing);
   const privacyLocked = useUiPrivacy();
+  // Reported separately from authentication errors: a socket that will not
+  // connect must never look like a failed sign-in or a failed message send.
+  const connectionWarning = useRealtimeStore((state) => state.warning);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   useKeystrokeUnlock(GAME_ENABLED && !unlocked ? challenge : null);
   useVisibilityLock(GAME_ENABLED);
+
+  // The shared hide action: header button, double tap and the visibility
+  // timeout all end up here, so they cannot drift apart.
+  const hideChat = useHideChat({ onHidden: () => setConversationId(null) });
 
   const handleTripleTap = useCallback(() => {
     if (!unlocked) return;
@@ -82,11 +91,28 @@ export function AppShell() {
     return <AuthPanel initialMode="reauth" />;
   }
 
-  if (conversationId) {
-    return <ChatScreen conversationId={conversationId} onBack={() => setConversationId(null)} />;
-  }
+  return (
+    <>
+      {connectionWarning ? <ConnectionBanner message={connectionWarning} /> : null}
+      {conversationId ? (
+        <ChatScreen conversationId={conversationId} onBack={() => setConversationId(null)} onHide={hideChat} />
+      ) : (
+        <ConversationList onOpen={setConversationId} />
+      )}
+    </>
+  );
+}
 
-  return <ConversationList onOpen={setConversationId} />;
+/** Live-transport notice. Never blocks the UI and never affects auth state. */
+function ConnectionBanner({ message }: { message: string }) {
+  return (
+    <div
+      role="status"
+      className="fixed inset-x-0 top-0 z-50 bg-warning/15 px-3 py-1 text-center text-[11px] text-ink-muted"
+    >
+      {message}
+    </div>
+  );
 }
 
 function useUiPrivacy() {
