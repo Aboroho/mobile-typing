@@ -19,7 +19,7 @@ import type {
  *
  * Everything above this line (services, API routes) talks to these interfaces
  * using plain objects and ISO timestamps. `memory` powers local development and
- * the test suite, `firestore` is the production implementation. Swapping the
+ * the test suite, `prisma` (PostgreSQL) is the production implementation. Swapping the
  * backend is therefore a configuration change, not a refactor — which is also
  * what allows a future React Native client to share this layer through the API.
  */
@@ -27,8 +27,9 @@ import type {
 /**
  * A stored profile.
  *
- * `id` is the Firebase uid: Firebase Authentication owns the credential, so no
- * password material is ever written here.
+ * `id` is the application user id (`u_…`). The Argon2 password hash is stored
+ * alongside the record by the provider but is never exposed through this
+ * interface (see `createUserWithHash` in `lib/services/auth-service.ts`).
  */
 export interface UserRecord extends UserProfile {
   /** Why an administrator disabled the account, when they gave a reason. */
@@ -255,7 +256,7 @@ export interface OutboxRepo {
 }
 
 export interface DataProvider {
-  readonly name: 'memory' | 'prisma' | 'firestore';
+  readonly name: 'memory' | 'prisma';
   users: UserRepo;
   sessions: SessionRepo;
   conversations: ConversationRepo;

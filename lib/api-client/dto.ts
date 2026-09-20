@@ -37,8 +37,8 @@ export interface SessionUser {
 export interface AuthResult {
   user: SessionUser;
   /**
-   * Always `null`. The Firebase ID token is held by the browser SDK, which
-   * attaches it to requests itself; this API never returns a credential.
+   * Always `null`. The session credential is the httpOnly `mt_session`
+   * cookie set by the response — it is never returned in a body.
    */
   token: string | null;
   /** Always `true`: the session is the httpOnly `mt_session` cookie. */

@@ -3,9 +3,9 @@ import { createApiClient, type ApiClient } from '@mt/api-client';
 /**
  * Single API client for the browser.
  *
- * Credentials are supplied by the auth client (the Firebase ID token) and by the
- * httpOnly session cookie the API sets, so no call site ever handles a token
- * directly.
+ * Credentials travel in the httpOnly session cookie the API sets (plus an
+ * optional `Authorization: Bearer` session token for non-browser callers), so
+ * no call site ever handles a token directly.
  */
 let cached: ApiClient | null = null;
 let tokenProvider: (() => Promise<string | null>) | null = null;

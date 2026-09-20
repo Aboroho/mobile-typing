@@ -97,7 +97,7 @@ export interface AdminQueryParams {
 export interface ApiClientInit {
   /** Defaults to same origin, which keeps the client proxy friendly. */
   baseUrl?: string;
-  /** Firebase ID token provider. Omit when using cookie sessions (dev auth). */
+  /** Session-token provider for `Authorization: Bearer` requests. Omit when using cookie sessions. */
   getToken?: () => Promise<string | null> | string | null;
   fetchImpl?: typeof fetch;
   /** Called for every response; useful for global "session expired" handling. */
@@ -247,9 +247,10 @@ export function createApiClient(init: ApiClientInit = {}) {
     auth: {
       me: () => request<{ user: SessionUser | null }>('/api/v1/auth/me'),
       /**
-       * Creates the application profile for the Firebase account the browser has
-       * just signed up. The credential is the `Authorization: Bearer` ID token
-       * this client attaches; a password is never part of a request body.
+       * Creates the account (`{ name, email, password }`, verified server-side
+       * against an Argon2 hash) and establishes the `mt_session` cookie
+       * session. Re-registering an existing email re-issues a session instead
+       * of failing, so accounts cannot be enumerated.
        */
       register: (input: RegisterInput) =>
         request<AuthResult>('/api/v1/auth/register', { method: 'POST', body: input }),

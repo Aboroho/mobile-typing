@@ -1,5 +1,5 @@
 /**
- * @mt/domain — pure business rules. No React, no Firebase, no HTTP. Every rule
+ * @mt/domain — pure business rules. No React, no I/O, no HTTP. Every rule
  * here is exercised by unit tests and reused by the server API layer, which is
  * what keeps the (future) React Native client on identical rules.
  */

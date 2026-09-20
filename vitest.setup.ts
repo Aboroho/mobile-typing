@@ -14,7 +14,6 @@ process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
 process.env.DATA_PROVIDER = 'memory';
 process.env.STORAGE_PROVIDER = 'memory';
 process.env.SEED_SECRET_CODE = 'opensesame';
-process.env.ARGON2_PEPPER = 'test-pepper';
 
 if (typeof globalThis.TextEncoder === 'undefined') {
   globalThis.TextEncoder = TextEncoder as unknown as typeof globalThis.TextEncoder;

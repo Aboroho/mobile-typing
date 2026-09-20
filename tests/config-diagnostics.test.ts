@@ -9,7 +9,7 @@ import { reportConfigIssues, resetReportedConfigIssues } from '@/lib/diagnostics
 
 /**
  * Configuration diagnostic tests for the argon2-session / Prisma / object-storage
- * backend (no Firebase).
+ * backend.
  */
 
 const localServer = {

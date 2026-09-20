@@ -81,7 +81,7 @@ function installApiStub() {
 }
 
 describe('public env', () => {
-  it('parses without Firebase vars', () => {
+  it('parses the public env', () => {
     const config = parsePublicEnv();
     expect(config.NEXT_PUBLIC_APP_URL).toBeTruthy();
     expect(config.NEXT_PUBLIC_ENABLE_TYPING_GAME).toBe(true);

@@ -64,7 +64,7 @@ export async function getAccessStatus(): Promise<AccessChallengeStatus> {
  * Starts a typing-game session: the browser receives the current secret code so
  * it can match keystrokes locally.
  *
- * Accepted trade-off (ARCHITECTURE.md §6): the code is readable by anyone who
+ * Accepted trade-off (docs/security.md, "The secret code is not a secret"): the code is readable by anyone who
  * inspects the bundle. It is therefore never treated as an authorisation
  * decision — it only gates which UI is shown. All data access is authorised
  * separately by `requireAccess` + `requireUser`.

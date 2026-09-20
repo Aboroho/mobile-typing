@@ -124,10 +124,10 @@ export async function getUserDetail(userId: string) {
 }
 
 /**
- * A profile as the admin panel sees it. No credential material is stored any
- * more — Firebase Authentication owns passwords — so all that is left to do is
- * re-derive `isAdmin` from the server environment instead of trusting a stored
- * flag.
+ * A profile as the admin panel sees it. The Argon2 password hash is stored by
+ * the provider but never exposed above the data layer, so all that is left
+ * to do is re-derive `isAdmin` from the server environment instead of
+ * trusting a stored flag.
  */
 function stripSecrets(record: UserRecord) {
   return { ...record, isAdmin: isAdminUser(record) };

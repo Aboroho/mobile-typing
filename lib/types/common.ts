@@ -1,4 +1,4 @@
-/** ISO-8601 timestamp string. Firestore timestamps are converted on the boundary. */
+/** ISO-8601 timestamp string, used at every layer including the API. */
 export type Timestamp = string;
 
 export interface EntityTimestamps {

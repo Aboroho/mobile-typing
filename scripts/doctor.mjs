@@ -3,7 +3,7 @@
  * Doctor script for the Keypad backend.
  *
  * Scans env files for common misconfigurations in the argon2/Prisma/S3-local
- * backend. Replaces the old Firebase-oriented check-firebase script.
+ * backend.
  *
  * Usage: node scripts/doctor.mjs [--no-server]
  */

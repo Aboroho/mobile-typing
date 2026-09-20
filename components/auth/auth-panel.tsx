@@ -30,8 +30,9 @@ type Mode = 'login' | 'register' | 'reauth';
  *
  * Which branch shows depends on server state, never on a client flag alone.
  *
- * Every credential here is checked by Firebase Authentication in the browser;
- * the API call that follows carries the resulting ID token and never a password.
+ * Passwords are posted to the API over TLS and verified server-side against
+ * an Argon2 hash; the resulting session lives in the httpOnly `mt_session`
+ * cookie, never in client state.
  */
 export function AuthPanel({ initialMode }: { initialMode: Mode }) {
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -230,10 +231,10 @@ function SwitchLink({ text, action, onClick }: { text: string; action: string; o
 }
 
 /**
- * Password reset is sent by Firebase itself, from the browser: this API has no
- * mail transport, and a server endpoint that answered `{ sent: true }` without
- * sending anything would be worse than none. Firebase never reveals whether the
- * address has an account.
+ * Password reset by email is not wired up yet (there is no mail transport):
+ * the client reports "not configured" instead of pretending an email was sent
+ * — an endpoint answering `{ sent: true }` without sending anything would be
+ * worse than none.
  */
 function ForgotPassword({ email }: { email: string }) {
   const [sent, setSent] = useState(false);

@@ -36,7 +36,7 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
     return () => globalThis.removeEventListener('mt:access-required', onAccessRequired);
   }, [lock, setPrivacyLocked]);
 
-  // A rejected Firebase credential (401 UNAUTHENTICATED / 403 ACCOUNT_DISABLED)
+  // A rejected session (401 UNAUTHENTICATED / 403 ACCOUNT_DISABLED)
   // drops the session, so the sign-in panel returns instead of every request
   // failing quietly behind a UI that still looks authenticated.
   useEffect(() => {

@@ -338,7 +338,7 @@ class MemoryMedia implements MediaRepo {
 
   /**
    * Atomic by construction here because the map read/write pair is synchronous.
-   * The Firestore implementation performs the same transition in a transaction.
+   * The Prisma implementation performs the same transition in a transaction.
    */
   async claimViewOnce(mediaId: string, viewerId: string): Promise<ViewOnceClaim> {
     const media = this.store.get(mediaId);
@@ -434,7 +434,7 @@ class MemoryCalls implements CallRepo {
 class MemoryConfig implements ConfigRepo {
   async getAccessConfig(): Promise<AccessConfigRecord> {
     const store = getStore();
-    // Mirrors the Firestore provider: a fresh store returns an unconfigured
+    // Mirrors the Prisma provider: a fresh store returns an unconfigured
     // record instead of failing, so `ensureAccessConfig()` can seed the code.
     if (!store.accessConfig) {
       const created = createDefaultConfig();
